@@ -2,6 +2,7 @@
 Date: 2026.03.04
 - Changes:
   - Fetch official lyrics from the web (lrclib.net) and correct the transcription with them (enabled by default, see --disable_lyrics_fetch and --lyrics_file)
+  - Use time-synced lyrics (LRC) from lrclib.net when available: linebreaks follow the official line structure and words missing from the transcription are inserted with timings derived from the line timestamps (also works with a local .lrc file via --lyrics_file)
   - Smooth notes to reduce pitch detection artifacts: octave errors, single-note outliers and out-of-range notes (enabled by default, see --disable_note_smoothing)
   - Download Cover from MusicBrainz
   - Fix selection of whisper model

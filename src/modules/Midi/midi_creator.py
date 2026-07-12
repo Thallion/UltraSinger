@@ -173,6 +173,8 @@ def create_midi_segments_from_transcribed_data(transcribed_data: list[Transcribe
             words.append(midi_segment.word)
         midi_segments = create_midi_notes_from_pitched_data(start_times, end_times, words,
                                                             pitched_data, allowed_notes)
+        for midi_segment, data in zip(midi_segments, transcribed_data):
+            midi_segment.is_line_end = data.is_line_end
         return midi_segments
 
 

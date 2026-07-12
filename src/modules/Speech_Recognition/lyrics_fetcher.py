@@ -1,5 +1,6 @@
 """Fetch official song lyrics from the web (lrclib.net)"""
 
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 
 import requests
@@ -9,6 +10,7 @@ from modules.console_colors import (
     blue_highlighted,
     red_highlighted,
 )
+from modules.Speech_Recognition.synced_lyrics import synced_lyrics_to_plain
 
 LRCLIB_API_BASE_URL = "https://lrclib.net/api"
 REQUEST_TIMEOUT_SECONDS = 10
@@ -21,10 +23,20 @@ _REQUEST_HEADERS = {
 }
 
 
-def fetch_lyrics_from_web(artist: str, title: str) -> str | None:
-    """Fetch official plain lyrics for a song from lrclib.net.
+@dataclass
+class FetchedLyrics:
+    """Official lyrics found online"""
 
-    Returns the lyrics text or None if nothing suitable was found.
+    plain_lyrics: str
+    # LRC formatted lyrics with line timestamps, when available
+    synced_lyrics: str | None = None
+
+
+def fetch_lyrics_from_web(artist: str, title: str) -> FetchedLyrics | None:
+    """Fetch official lyrics for a song from lrclib.net.
+
+    Returns the plain lyrics and, when available, time-synced lyrics in LRC
+    format. Returns None if nothing suitable was found.
     """
     if not title:
         return None
@@ -34,18 +46,20 @@ def fetch_lyrics_from_web(artist: str, title: str) -> str | None:
         f"for {blue_highlighted(f'{artist} - {title}')}"
     )
 
-    lyrics = __fetch_exact_match(artist, title)
-    if lyrics is None:
-        lyrics = __fetch_from_search(artist, title)
+    fetched_lyrics = __fetch_exact_match(artist, title)
+    if fetched_lyrics is None:
+        fetched_lyrics = __fetch_from_search(artist, title)
 
-    if lyrics is None:
+    if fetched_lyrics is None:
         print(
             f"{ULTRASINGER_HEAD} {red_highlighted('No official lyrics found online. Keeping transcribed lyrics.')}"
         )
+    elif fetched_lyrics.synced_lyrics is not None:
+        print(f"{ULTRASINGER_HEAD} Found official lyrics online (with synced line timings)")
     else:
         print(f"{ULTRASINGER_HEAD} Found official lyrics online")
 
-    return lyrics
+    return fetched_lyrics
 
 
 def __request_json(endpoint: str, params: dict) -> dict | list | None:
@@ -63,7 +77,7 @@ def __request_json(endpoint: str, params: dict) -> dict | list | None:
         return None
 
 
-def __fetch_exact_match(artist: str, title: str) -> str | None:
+def __fetch_exact_match(artist: str, title: str) -> FetchedLyrics | None:
     if not artist or artist == "Unknown Artist":
         return None
 
@@ -71,11 +85,11 @@ def __fetch_exact_match(artist: str, title: str) -> str | None:
         "get", {"artist_name": artist, "track_name": title}
     )
     if isinstance(result, dict):
-        return __get_plain_lyrics(result)
+        return __get_lyrics(result)
     return None
 
 
-def __fetch_from_search(artist: str, title: str) -> str | None:
+def __fetch_from_search(artist: str, title: str) -> FetchedLyrics | None:
     query = f"{artist} {title}" if artist and artist != "Unknown Artist" else title
     results = __request_json("search", {"q": query})
     if not isinstance(results, list):
@@ -86,7 +100,7 @@ def __fetch_from_search(artist: str, title: str) -> str | None:
     for result in results:
         if not isinstance(result, dict):
             continue
-        lyrics = __get_plain_lyrics(result)
+        lyrics = __get_lyrics(result)
         if lyrics is None:
             continue
         similarity = __song_similarity(
@@ -98,13 +112,24 @@ def __fetch_from_search(artist: str, title: str) -> str | None:
     return best_lyrics
 
 
-def __get_plain_lyrics(result: dict) -> str | None:
+def __get_lyrics(result: dict) -> FetchedLyrics | None:
     if result.get("instrumental"):
         return None
-    lyrics = result.get("plainLyrics")
-    if isinstance(lyrics, str) and lyrics.strip():
-        return lyrics
-    return None
+
+    plain_lyrics = result.get("plainLyrics")
+    if not isinstance(plain_lyrics, str) or not plain_lyrics.strip():
+        plain_lyrics = None
+
+    synced_lyrics = result.get("syncedLyrics")
+    if not isinstance(synced_lyrics, str) or not synced_lyrics.strip():
+        synced_lyrics = None
+
+    if plain_lyrics is None and synced_lyrics is not None:
+        plain_lyrics = synced_lyrics_to_plain(synced_lyrics)
+
+    if not plain_lyrics:
+        return None
+    return FetchedLyrics(plain_lyrics=plain_lyrics, synced_lyrics=synced_lyrics)
 
 
 def __song_similarity(artist: str, title: str, found_artist: str, found_title: str) -> float:

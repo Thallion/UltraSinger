@@ -14,6 +14,7 @@ class TranscribedData:
     end: float = 0
     is_hyphen: bool = False
     is_word_end: bool = True
+    is_line_end: bool = False
 
 
 def from_whisper(whisper_dict) -> TranscribedData:

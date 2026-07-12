@@ -258,7 +258,12 @@ using the artist and title of the song and corrects the transcribed words with t
 The timings always stay untouched — only misheard words are replaced. If the found lyrics
 differ too much from the transcription, no correction is applied.
 
-You can also provide your own reference lyrics as a plain text file:
+When time-synced lyrics (LRC) are available, they are used in addition:
+linebreaks in the UltraStar file then follow the official line structure instead of the
+silence heuristic, and words that are missing from the transcription are inserted with
+timings derived from the line timestamps and the surrounding words.
+
+You can also provide your own reference lyrics as a plain text file or a time-synced .lrc file:
 
 ```commandline
 -i XYZ --lyrics_file "input/lyrics.txt"

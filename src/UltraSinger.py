@@ -51,6 +51,9 @@ from modules.Speech_Recognition.hyphenation import (
     hyphenate_each_word,
 )
 from modules.Speech_Recognition.Whisper import transcribe_with_whisper
+from modules.Speech_Recognition.lyrics_aligner import align_lyrics_to_transcription
+from modules.Speech_Recognition.lyrics_fetcher import fetch_lyrics_from_web
+from modules.Midi.note_smoothing import smooth_midi_segments
 from modules.Ultrastar import (
     ultrastar_writer,
 )
@@ -159,6 +162,12 @@ def run() -> tuple[str, Score, Score]:
         print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Hyphenation will not be applied')}")
     if settings.quantize_to_key:
         print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Notes will be quantized to the detected musical key')}")
+    if not settings.smooth_notes:
+        print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Note smoothing will not be applied')}")
+    if not settings.fetch_lyrics:
+        print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Official lyrics will not be fetched from the web')}")
+    if settings.lyrics_file is not None:
+        print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Lyrics will be corrected with local file: ' + settings.lyrics_file)}")
 
     process_data = InitProcessData()
 
@@ -212,6 +221,10 @@ def run() -> tuple[str, Score, Score]:
     else:
         process_data.midi_segments = create_repitched_midi_segments_from_ultrastar_txt(process_data.pitched_data,
                                                                                        process_data.parsed_file)
+
+    # Smooth notes to reduce pitch detection artifacts
+    if settings.smooth_notes and process_data.midi_segments:
+        process_data.midi_segments = smooth_midi_segments(process_data.midi_segments, allowed_notes_for_key)
 
     # Merge syllable segments
     if not settings.ignore_audio:
@@ -505,6 +518,10 @@ def TranscribeAudio(process_data):
 
     process_data.transcribed_data = transcription_result.transcribed_data
 
+    # Correct transcription with official lyrics
+    if settings.fetch_lyrics or settings.lyrics_file is not None:
+        correct_transcription_with_reference_lyrics(process_data)
+
     # Hyphen
     # Todo: Is it really unnecessary?
     remove_unecessary_punctuations(process_data.transcribed_data)
@@ -517,6 +534,25 @@ def TranscribeAudio(process_data):
     process_data.transcribed_data = remove_silence_from_transcription_data(
         process_data.process_data_paths.processing_audio_path, process_data.transcribed_data
     )
+
+
+def correct_transcription_with_reference_lyrics(process_data: ProcessData) -> None:
+    """Fetch reference lyrics (local file or web) and correct the transcribed words with them"""
+    reference_lyrics = None
+    if settings.lyrics_file is not None:
+        if check_file_exists(settings.lyrics_file):
+            print(f"{ULTRASINGER_HEAD} Using local reference lyrics: {blue_highlighted(settings.lyrics_file)}")
+            with open(settings.lyrics_file, "r", encoding="utf-8") as file:
+                reference_lyrics = file.read()
+        else:
+            print(f"{ULTRASINGER_HEAD} {red_highlighted('Error: Lyrics file not found:')} {blue_highlighted(settings.lyrics_file)}")
+    elif settings.fetch_lyrics:
+        reference_lyrics = fetch_lyrics_from_web(
+            process_data.media_info.artist, process_data.media_info.title
+        )
+
+    if reference_lyrics is not None:
+        align_lyrics_to_transcription(process_data.transcribed_data, reference_lyrics)
 
 
 def CreateUltraStarTxt(process_data: ProcessData):
@@ -853,6 +889,12 @@ def init_settings(argv: list[str]) -> Settings:
             settings.interactive_mode = True
         elif opt in ("--quantize_to_key"):
             settings.quantize_to_key = arg
+        elif opt in ("--disable_note_smoothing"):
+            settings.smooth_notes = False
+        elif opt in ("--disable_lyrics_fetch"):
+            settings.fetch_lyrics = False
+        elif opt in ("--lyrics_file"):
+            settings.lyrics_file = arg
         elif opt in ("--ffmpeg"):
             settings.user_ffmpeg_path = arg
     if settings.output_folder_path == "":
@@ -894,6 +936,9 @@ def arg_options():
         "musescore_path=",
         "keep_numbers",
         "quantize_to_key",
+        "disable_note_smoothing",
+        "disable_lyrics_fetch",
+        "lyrics_file=",
         "interactive",
         "cookiefile=",
         "ffmpeg="

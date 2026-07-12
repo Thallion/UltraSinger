@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""UltraSinger postprocessor v2: smooth notes, replace lyrics with reference text."""
+"""UltraSinger postprocessor v2: smooth notes, replace lyrics with reference text.
+
+NOTE: This functionality is now built into the main UltraSinger pipeline and
+enabled by default (see --disable_note_smoothing, --disable_lyrics_fetch and
+--lyrics_file). This standalone script remains for postprocessing already
+existing UltraStar txt files.
+"""
 import re
 import sys
 import os

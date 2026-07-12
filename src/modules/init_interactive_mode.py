@@ -87,7 +87,17 @@ def configure_additional_options(console, settings, header):
             f"{header} Disable [green]hyphenation[/green]? ([bright_green]y[/bright_green]/[bright_red]n[/bright_red], default '[bright_red]n[/bright_red]'): "  
         ).strip().lower() == 'y')  
   
-        # Disable Vocal Separation  
+        # Disable Note Smoothing
+        settings.smooth_notes = not (console.input(
+            f"{header} Disable [green]note smoothing[/green]? ([bright_green]y[/bright_green]/[bright_red]n[/bright_red], default '[bright_red]n[/bright_red]'): "
+        ).strip().lower() == 'y')
+
+        # Disable Lyrics Fetching
+        settings.fetch_lyrics = not (console.input(
+            f"{header} Disable fetching [green]official lyrics[/green] from the web? ([bright_green]y[/bright_green]/[bright_red]n[/bright_red], default '[bright_red]n[/bright_red]'): "
+        ).strip().lower() == 'y')
+
+        # Disable Vocal Separation
         settings.use_separated_vocal = not (console.input(  
             f"{header} Disable [green]vocal separation[/green]? ([bright_green]y[/bright_green]/[bright_red]n[/bright_red], default '[bright_red]n[/bright_red]'): "  
         ).strip().lower() == 'y')  

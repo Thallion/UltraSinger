@@ -1,6 +1,8 @@
 # Version: 0.0.13dev16
 Date: 2026.03.04
 - Changes:
+  - Fetch official lyrics from the web (lrclib.net) and correct the transcription with them (enabled by default, see --disable_lyrics_fetch and --lyrics_file)
+  - Smooth notes to reduce pitch detection artifacts: octave errors, single-note outliers and out-of-range notes (enabled by default, see --disable_note_smoothing)
   - Download Cover from MusicBrainz
   - Fix selection of whisper model
   - Added colab notebook

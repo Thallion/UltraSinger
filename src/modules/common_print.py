@@ -55,6 +55,9 @@ def print_help() -> None:
     --keep_cache            Keep cache folder after creation. Cache folder is removed by default.
     --plot                  Enable creation of plots. Plots are disabled by default.
     --quantize_to_key       Quantize notes to the detected musical key. This removes slides and out-of-key notes.
+    --disable_note_smoothing Disable smoothing of pitch detection artifacts (octave errors, outliers). Enabled by default.
+    --disable_lyrics_fetch  Disable fetching official lyrics from the web to correct the transcription. Enabled by default.
+    --lyrics_file           Path to a local text file with the official lyrics. Overrides web fetching.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words

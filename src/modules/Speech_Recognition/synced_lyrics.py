@@ -3,7 +3,6 @@
 import math
 import re
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 
 from modules.console_colors import (
     ULTRASINGER_HEAD,
@@ -13,6 +12,7 @@ from modules.console_colors import (
 from modules.Speech_Recognition.TranscribedData import TranscribedData
 from modules.Speech_Recognition.lyrics_aligner import (
     MIN_ALIGNMENT_RATIO,
+    match_word_sequences,
     normalize_word,
     split_lyrics_into_words,
 )
@@ -72,7 +72,9 @@ def synced_lyrics_to_plain(synced_lyrics: str) -> str:
 
 
 def align_synced_lyrics_to_transcription(
-    transcribed_data: list[TranscribedData], synced_lyrics: str
+    transcribed_data: list[TranscribedData],
+    synced_lyrics: str,
+    use_levenshtein: bool = False,
 ) -> list[TranscribedData] | None:
     """Correct the transcription with time-synced reference lyrics.
 
@@ -104,10 +106,10 @@ def align_synced_lyrics_to_transcription(
     transcribed_normalized = [normalize_word(data.word) for data in transcribed_data]
     reference_normalized = [normalize_word(word) for word in reference_words]
 
-    matcher = SequenceMatcher(
-        None, transcribed_normalized, reference_normalized, autojunk=False
+    ratio, opcodes = match_word_sequences(
+        transcribed_normalized, reference_normalized, use_levenshtein
     )
-    if matcher.ratio() < MIN_ALIGNMENT_RATIO:
+    if ratio < MIN_ALIGNMENT_RATIO:
         print(
             f"{ULTRASINGER_HEAD} {red_highlighted('Synced lyrics differ too much from the transcription. Skipping synced lyrics correction.')}"
         )
@@ -118,7 +120,7 @@ def align_synced_lyrics_to_transcription(
     # data None means the reference word was not transcribed (missing word),
     # reference index None means the transcribed word has no reference match.
     aligned: list[tuple[TranscribedData | None, int | None]] = []
-    for tag, trans_start, trans_end, ref_start, ref_end in matcher.get_opcodes():
+    for tag, trans_start, trans_end, ref_start, ref_end in opcodes:
         if tag == "delete":
             # Transcribed words not in the reference (e.g. ad-libs) - keep
             for trans_index in range(trans_start, trans_end):

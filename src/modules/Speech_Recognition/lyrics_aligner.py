@@ -3,6 +3,8 @@
 import re
 from difflib import SequenceMatcher
 
+import Levenshtein
+
 from modules.console_colors import (
     ULTRASINGER_HEAD,
     blue_highlighted,
@@ -37,7 +39,31 @@ def split_lyrics_into_words(lyrics_text: str) -> list[str]:
     return words
 
 
-def align_lyrics_to_transcription(transcribed_data, reference_lyrics: str) -> int:
+def match_word_sequences(
+    transcribed_words: list[str],
+    reference_words: list[str],
+    use_levenshtein: bool = False,
+) -> tuple[float, list[tuple[str, int, int, int, int]]]:
+    """Align two word sequences, returning the similarity ratio and opcodes.
+
+    Both matchers return difflib-style opcodes and a comparable ratio.
+    difflib's SequenceMatcher is the default; Levenshtein is faster on very
+    long songs.
+    """
+    if use_levenshtein:
+        return (
+            Levenshtein.ratio(transcribed_words, reference_words),
+            Levenshtein.opcodes(transcribed_words, reference_words),
+        )
+    matcher = SequenceMatcher(
+        None, transcribed_words, reference_words, autojunk=False
+    )
+    return matcher.ratio(), matcher.get_opcodes()
+
+
+def align_lyrics_to_transcription(
+    transcribed_data, reference_lyrics: str, use_levenshtein: bool = False
+) -> int:
     """Correct transcribed words with words from the reference lyrics.
 
     The two word sequences are aligned with a sequence matcher. Words that
@@ -53,17 +79,17 @@ def align_lyrics_to_transcription(transcribed_data, reference_lyrics: str) -> in
     transcribed_normalized = [normalize_word(data.word) for data in transcribed_data]
     reference_normalized = [normalize_word(word) for word in reference_words]
 
-    matcher = SequenceMatcher(
-        None, transcribed_normalized, reference_normalized, autojunk=False
+    ratio, opcodes = match_word_sequences(
+        transcribed_normalized, reference_normalized, use_levenshtein
     )
-    if matcher.ratio() < MIN_ALIGNMENT_RATIO:
+    if ratio < MIN_ALIGNMENT_RATIO:
         print(
             f"{ULTRASINGER_HEAD} {red_highlighted('Reference lyrics differ too much from the transcription. Skipping lyrics correction.')}"
         )
         return -1
 
     corrections = 0
-    for tag, trans_start, trans_end, ref_start, ref_end in matcher.get_opcodes():
+    for tag, trans_start, trans_end, ref_start, ref_end in opcodes:
         if tag not in ("equal", "replace"):
             # 'insert': reference words without sung/timed counterpart - skip.
             # 'delete': transcribed words not in the reference (e.g. ad-libs) - keep.

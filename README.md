@@ -130,6 +130,7 @@ _Not all options working now!_
     --disable_note_smoothing Disable smoothing of pitch detection artifacts (octave errors, outliers). Enabled by default.
     --disable_lyrics_fetch  Disable fetching official lyrics from the web to correct the transcription. Enabled by default.
     --lyrics_file           Path to a local text file with the official lyrics. Overrides web fetching.
+    --levenshtein_word_matching Match reference lyrics with Levenshtein instead of difflib. Faster on very long songs. Disabled by default.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words

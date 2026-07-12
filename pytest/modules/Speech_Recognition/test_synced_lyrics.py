@@ -59,13 +59,20 @@ class TestParseSyncedLyrics(unittest.TestCase):
 
 
 class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
+    use_levenshtein = False
+
+    def _align(self, transcribed, synced):
+        return align_synced_lyrics_to_transcription(
+            transcribed, synced, use_levenshtein=self.use_levenshtein
+        )
+
     def test_line_ends_are_marked(self):
         transcribed = _transcription(
             [("hello", 1.0, 1.5), ("world", 1.6, 2.0), ("sing", 5.0, 5.4), ("along", 5.5, 6.0)]
         )
         synced = "[00:01.00] Hello world\n[00:05.00] Sing along"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertIsNotNone(new_data)
         self.assertEqual([data.is_line_end for data in new_data], [False, True, False, False])
@@ -74,7 +81,7 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         transcribed = _transcription([("hello", 1.0, 1.5), ("word", 1.6, 2.0)])
         synced = "[00:01.00] Hello world"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertEqual([data.word for data in new_data], ["Hello ", "world "])
 
@@ -84,7 +91,7 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         )
         synced = "[00:01.00] Hello world\n[00:05.00] Sing along"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertEqual(
             [data.word for data in new_data], ["Hello ", "world ", "Sing ", "along "]
@@ -101,7 +108,7 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         transcribed = _transcription([("hello", 1.0, 1.5), ("world", 1.6, 2.0)])
         synced = "[00:01.00] Hello world\n[00:05.00] Sing along"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertEqual(len(new_data), 4)
         self.assertEqual([data.word for data in new_data[2:]], ["Sing ", "along "])
@@ -115,7 +122,7 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         # "Sing" has no room between "world" and "along"
         synced = "[00:01.00] Hello world Sing along"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertEqual(
             [data.word for data in new_data], ["Hello ", "world ", "along "]
@@ -127,7 +134,7 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         )
         synced = "[00:01.00] Hello world\n[00:05.00] Sing"
 
-        new_data = align_synced_lyrics_to_transcription(transcribed, synced)
+        new_data = self._align(transcribed, synced)
 
         self.assertEqual(
             [data.word for data in new_data], ["Hello ", "uh ", "world ", "Sing "]
@@ -140,11 +147,19 @@ class TestAlignSyncedLyricsToTranscription(unittest.TestCase):
         )
         synced = "[00:01.00] some other song lyrics entirely unrelated"
 
-        self.assertIsNone(align_synced_lyrics_to_transcription(transcribed, synced))
+        self.assertIsNone(self._align(transcribed, synced))
 
     def test_unparsable_lyrics_are_rejected(self):
         transcribed = _transcription([("hello", 1.0, 1.5)])
-        self.assertIsNone(align_synced_lyrics_to_transcription(transcribed, "no timestamps"))
+        self.assertIsNone(self._align(transcribed, "no timestamps"))
+
+
+class TestAlignSyncedLyricsToTranscriptionWithLevenshtein(
+    TestAlignSyncedLyricsToTranscription
+):
+    """Rerun all alignment scenarios with the Levenshtein matcher"""
+
+    use_levenshtein = True
 
 
 if __name__ == "__main__":

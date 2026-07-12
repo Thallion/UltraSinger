@@ -53,6 +53,11 @@ from modules.Speech_Recognition.hyphenation import (
 from modules.Speech_Recognition.Whisper import transcribe_with_whisper
 from modules.Speech_Recognition.lyrics_aligner import align_lyrics_to_transcription
 from modules.Speech_Recognition.lyrics_fetcher import fetch_lyrics_from_web
+from modules.Speech_Recognition.synced_lyrics import (
+    align_synced_lyrics_to_transcription,
+    parse_synced_lyrics,
+    synced_lyrics_to_plain,
+)
 from modules.Midi.note_smoothing import smooth_midi_segments
 from modules.Ultrastar import (
     ultrastar_writer,
@@ -112,6 +117,7 @@ def add_hyphen_to_data(
                     dup.is_word_end = True
                 else:
                     dup.is_word_end = False
+                    dup.is_line_end = False
                 new_data.append(dup)
 
     return new_data
@@ -289,6 +295,7 @@ def split_syllables_into_segments(
             first_segment.word = first_segment.word[:-1]
 
         first_segment.is_word_end = False
+        first_segment.is_line_end = False
         new_data.append(first_segment)
 
         full_segments, partial_segment = divmod(remainder, syllable_segment_size)
@@ -326,6 +333,7 @@ def split_syllables_into_segments(
         if has_space:
             new_data[-1].word += " "
             new_data[-1].is_word_end = True
+        new_data[-1].is_line_end = data.is_line_end
     return new_data
 
 
@@ -398,6 +406,8 @@ def merge_syllable_segments(midi_segments: list[MidiSegment],
         if should_merge_tilde:
             new_data[-1].end = data.end
             new_midi_notes[-1].end = data.end
+            new_data[-1].is_line_end = new_data[-1].is_line_end or data.is_line_end
+            new_midi_notes[-1].is_line_end = new_midi_notes[-1].is_line_end or midi_segments[i].is_line_end
 
             # For slides: Keep the original note (not the transition note)
             if is_potential_slide and not is_same_note:
@@ -416,6 +426,8 @@ def merge_syllable_segments(midi_segments: list[MidiSegment],
             # Merge regular syllable with previous syllable (same pitch)
             new_data[-1].end = data.end
             new_midi_notes[-1].end = data.end
+            new_data[-1].is_line_end = new_data[-1].is_line_end or data.is_line_end
+            new_midi_notes[-1].is_line_end = new_midi_notes[-1].is_line_end or midi_segments[i].is_line_end
 
             # Check if current word has space at end before stripping
             has_space = str(data.word).endswith(" ")
@@ -538,21 +550,39 @@ def TranscribeAudio(process_data):
 
 def correct_transcription_with_reference_lyrics(process_data: ProcessData) -> None:
     """Fetch reference lyrics (local file or web) and correct the transcribed words with them"""
-    reference_lyrics = None
+    plain_lyrics = None
+    synced_lyrics = None
     if settings.lyrics_file is not None:
         if check_file_exists(settings.lyrics_file):
             print(f"{ULTRASINGER_HEAD} Using local reference lyrics: {blue_highlighted(settings.lyrics_file)}")
             with open(settings.lyrics_file, "r", encoding="utf-8") as file:
-                reference_lyrics = file.read()
+                file_content = file.read()
+            if parse_synced_lyrics(file_content):
+                # The local file is in LRC format (e.g. an .lrc file)
+                synced_lyrics = file_content
+                plain_lyrics = synced_lyrics_to_plain(file_content)
+            else:
+                plain_lyrics = file_content
         else:
             print(f"{ULTRASINGER_HEAD} {red_highlighted('Error: Lyrics file not found:')} {blue_highlighted(settings.lyrics_file)}")
     elif settings.fetch_lyrics:
-        reference_lyrics = fetch_lyrics_from_web(
+        fetched_lyrics = fetch_lyrics_from_web(
             process_data.media_info.artist, process_data.media_info.title
         )
+        if fetched_lyrics is not None:
+            plain_lyrics = fetched_lyrics.plain_lyrics
+            synced_lyrics = fetched_lyrics.synced_lyrics
 
-    if reference_lyrics is not None:
-        align_lyrics_to_transcription(process_data.transcribed_data, reference_lyrics)
+    if synced_lyrics is not None:
+        new_transcribed_data = align_synced_lyrics_to_transcription(
+            process_data.transcribed_data, synced_lyrics
+        )
+        if new_transcribed_data is not None:
+            process_data.transcribed_data = new_transcribed_data
+            return
+
+    if plain_lyrics is not None:
+        align_lyrics_to_transcription(process_data.transcribed_data, plain_lyrics)
 
 
 def CreateUltraStarTxt(process_data: ProcessData):

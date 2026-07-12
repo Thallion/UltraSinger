@@ -47,7 +47,14 @@ def create_ultrastar_txt(
     ultrastar_bpm = real_bpm_to_ultrastar_bpm(real_bpm)
     multiplication = get_multiplier(ultrastar_bpm)
     ultrastar_bpm = ultrastar_bpm * get_multiplier(ultrastar_bpm)
-    silence_split_duration = calculate_silent_beat_length(midi_segments)
+
+    # Line ends from synced lyrics take precedence over the silence heuristic
+    has_synced_linebreaks = any(midi_segment.is_line_end for midi_segment in midi_segments)
+    if has_synced_linebreaks:
+        print(f"{ULTRASINGER_HEAD} Using linebreaks from synced lyrics.")
+        silence_split_duration = 0
+    else:
+        silence_split_duration = calculate_silent_beat_length(midi_segments)
 
     with open(ultrastar_file_output, "w", encoding=FILE_ENCODING) as file:
         gap = midi_segments[0].start
@@ -127,6 +134,11 @@ def create_ultrastar_txt(
 
             file.write(line)
 
+            if has_synced_linebreaks:
+                if midi_segment.is_line_end and i != len(midi_segments) - 1:
+                    file.write(__linebreak_line(midi_segment.end, gap, real_bpm, multiplication))
+                continue
+
             # detect silence between words
             if not midi_segment.word.endswith(" "):
                 separated_word_silence.append(silence)
@@ -134,18 +146,17 @@ def create_ultrastar_txt(
 
             if i != len(midi_segments) - 1 and silence_split_duration != 0 and silence > silence_split_duration or any(
                     s > silence_split_duration for s in separated_word_silence):
-                # - 10
-                # '-' end of current sing part
-                # 'n1' show next at time in real beat
-                show_next = (
-                        second_to_beat(midi_segment.end - gap, real_bpm)
-                        * multiplication
-                )
-                linebreak = f"{UltrastarTxtTag.LINEBREAK.value} " \
-                            f"{str(round(show_next))}\n"
-                file.write(linebreak)
+                file.write(__linebreak_line(midi_segment.end, gap, real_bpm, multiplication))
             separated_word_silence = []
         file.write(f"{UltrastarTxtTag.FILE_END.value}")
+
+
+def __linebreak_line(segment_end: float, gap: float, real_bpm: float, multiplication: int) -> str:
+    # - 10
+    # '-' end of current sing part
+    # 'n1' show next at time in real beat
+    show_next = second_to_beat(segment_end - gap, real_bpm) * multiplication
+    return f"{UltrastarTxtTag.LINEBREAK.value} {str(round(show_next))}\n"
 
 
 def deviation(silence_parts):

@@ -38,6 +38,10 @@ def remove_silence(silence_parts_list: list[tuple[float, float]], transcribed_da
         origin_end = data.end
         was_split = False
 
+        # When the word gets split, the line end has to move to the last part
+        is_line_end = data.is_line_end
+        data.is_line_end = False
+
         for silence_start, silence_end in silence_parts_list:
 
             # |    ****    | silence
@@ -119,6 +123,9 @@ def remove_silence(silence_parts_list: list[tuple[float, float]], transcribed_da
             if silence_start > origin_end:
                 # Nothing to do with this word anymore, go to next word
                 break
+
+        if is_line_end and new_transcribed_data:
+            new_transcribed_data[-1].is_line_end = True
     return new_transcribed_data
 
 

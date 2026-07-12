@@ -2,11 +2,16 @@
 
 import unittest
 
+import librosa
 from packaging import version
 from unittest.mock import patch, mock_open
 from src.modules.Ultrastar.ultrastar_writer import create_ultrastar_txt, deviation, format_separated_string
 from src.modules.Midi.MidiSegment import MidiSegment
 from src.modules.Ultrastar.ultrastar_txt import UltrastarTxtValue, UltrastarTxtTag
+
+# Resolve librosa's lazy-loaded attribute before tests mock builtins.open,
+# since the lazy loader reads files on first attribute access
+librosa.note_to_midi("C4")
 
 
 class TestCreateUltrastarTxt(unittest.TestCase):
@@ -172,6 +177,24 @@ class TestCreateUltrastarTxt(unittest.TestCase):
                 default_ultrastar_class, bpm
             )
         return mock_file
+
+    def test_synced_lyrics_line_ends_write_linebreaks(self):
+        # Arrange
+        bpm, midi_segments, ultrastar_file_output = self.arrange()
+        midi_segments[0].is_line_end = True
+        class_under_test = UltrastarTxtValue()
+        class_under_test.version = "0.2.0"
+
+        # Act
+        mock_file = self.act(bpm, class_under_test, midi_segments, ultrastar_file_output)
+
+        # Assert a linebreak follows the first note and none follows the last note
+        mock_file_handle = mock_file.return_value.__enter__.return_value.write
+        write_calls = [args[0][0] for args in mock_file_handle.call_args_list]
+        note_index = write_calls.index(": 0 52 1 UltraSinger \n")
+        self.assertEqual(write_calls[note_index + 1], "- 52\n")
+        self.assertEqual(write_calls.count("- 52\n"), 1)
+        self.assertEqual(write_calls[-1], "E")
 
     def test_most_common_silent_part_CorTaySnf(self):
         # Arrange

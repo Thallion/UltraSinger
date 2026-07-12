@@ -30,6 +30,7 @@ class Settings:
     smooth_notes = True  # Smooth out pitch detection artifacts (octave errors, outliers, out-of-range notes)
     fetch_lyrics = True  # Fetch official lyrics from the web and correct the transcription with them
     lyrics_file = None  # Optional path to a local reference lyrics text file (overrides web fetching)
+    levenshtein_word_matching = False  # Match reference lyrics words with Levenshtein instead of difflib (faster on very long songs)
 
     # Process data Paths
     input_file_path = ""

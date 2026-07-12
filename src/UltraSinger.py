@@ -174,6 +174,8 @@ def run() -> tuple[str, Score, Score]:
         print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Official lyrics will not be fetched from the web')}")
     if settings.lyrics_file is not None:
         print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Lyrics will be corrected with local file: ' + settings.lyrics_file)}")
+    if settings.levenshtein_word_matching:
+        print(f"{ULTRASINGER_HEAD} {bright_green_highlighted('Option:')} {cyan_highlighted('Reference lyrics will be matched with Levenshtein instead of difflib')}")
 
     process_data = InitProcessData()
 
@@ -575,14 +577,20 @@ def correct_transcription_with_reference_lyrics(process_data: ProcessData) -> No
 
     if synced_lyrics is not None:
         new_transcribed_data = align_synced_lyrics_to_transcription(
-            process_data.transcribed_data, synced_lyrics
+            process_data.transcribed_data,
+            synced_lyrics,
+            use_levenshtein=settings.levenshtein_word_matching,
         )
         if new_transcribed_data is not None:
             process_data.transcribed_data = new_transcribed_data
             return
 
     if plain_lyrics is not None:
-        align_lyrics_to_transcription(process_data.transcribed_data, plain_lyrics)
+        align_lyrics_to_transcription(
+            process_data.transcribed_data,
+            plain_lyrics,
+            use_levenshtein=settings.levenshtein_word_matching,
+        )
 
 
 def CreateUltraStarTxt(process_data: ProcessData):
@@ -925,6 +933,8 @@ def init_settings(argv: list[str]) -> Settings:
             settings.fetch_lyrics = False
         elif opt in ("--lyrics_file"):
             settings.lyrics_file = arg
+        elif opt in ("--levenshtein_word_matching"):
+            settings.levenshtein_word_matching = True
         elif opt in ("--ffmpeg"):
             settings.user_ffmpeg_path = arg
     if settings.output_folder_path == "":
@@ -969,6 +979,7 @@ def arg_options():
         "disable_note_smoothing",
         "disable_lyrics_fetch",
         "lyrics_file=",
+        "levenshtein_word_matching",
         "interactive",
         "cookiefile=",
         "ffmpeg="

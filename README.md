@@ -127,6 +127,9 @@ _Not all options working now!_
     --keep_cache            Keep cache folder after creation. Cache folder is removed by default.
     --plot                  Enable creation of plots. Plots are disabled by default.
     --quantize_to_key       Quantize notes to detected musical key. Removes pitch slides and out-of-key notes. >> ((default) is enabled)
+    --disable_note_smoothing Disable smoothing of pitch detection artifacts (octave errors, outliers). Enabled by default.
+    --disable_lyrics_fetch  Disable fetching official lyrics from the web to correct the transcription. Enabled by default.
+    --lyrics_file           Path to a local text file with the official lyrics. Overrides web fetching.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words
@@ -234,6 +237,38 @@ By default, UltraSinger quantizes all detected notes to the detected musical key
 
 If you want to keep the raw pitch detection without quantization, set `quantize_to_key = False`.
 For most songs  quantization should produces better results.
+
+### 🎼 Note Smoothing
+
+By default, UltraSinger smooths the detected notes to reduce pitch detection artifacts:
+* Octave errors (notes detected one or more octaves away from their local context) are shifted back
+* Single-note outliers between two agreeing neighbours are replaced by the neighbours' pitch
+* Notes far outside the song's vocal range are shifted back by whole octaves
+
+The melody itself is kept intact. To keep the raw detected notes:
+
+```commandline
+-i XYZ --disable_note_smoothing
+```
+
+### 📝 Official Lyrics
+
+By default, UltraSinger fetches the official lyrics from the web ([lrclib.net](https://lrclib.net))
+using the artist and title of the song and corrects the transcribed words with them.
+The timings always stay untouched — only misheard words are replaced. If the found lyrics
+differ too much from the transcription, no correction is applied.
+
+You can also provide your own reference lyrics as a plain text file:
+
+```commandline
+-i XYZ --lyrics_file "input/lyrics.txt"
+```
+
+To disable the correction completely:
+
+```commandline
+-i XYZ --disable_lyrics_fetch
+```
 
 ### Sheet Music
 

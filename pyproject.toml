@@ -24,6 +24,7 @@ dependencies = [
     "matplotlib",
     "musicbrainzngs",
     "python-Levenshtein",
+    "requests",
     "pretty-midi",
     "unidecode",
     "pyhyphen",

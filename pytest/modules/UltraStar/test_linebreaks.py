@@ -49,6 +49,14 @@ class ComputeLinebreaksTest(unittest.TestCase):
         self.assertEqual(compute_linebreaks(segments, [line_end]), set())
         self.assertEqual(compute_linebreaks(segments, [line_end], has_lyric_lines=True), {3})
 
+    def test_inside_a_line_of_reference_lyrics_only_a_long_rest_ends_the_line(self):
+        words = ["one ", "two ", "three ", "four ", "five ", "six "]
+        short_rest = notes(words, rests={2: 0.5})
+        long_rest = notes(words, rests={2: 1.5})
+        line_end = short_rest[5].end
+        self.assertEqual(compute_linebreaks(short_rest, [line_end], has_lyric_lines=True), set())
+        self.assertEqual(compute_linebreaks(long_rest, [long_rest[5].end], has_lyric_lines=True), {2})
+
     def test_few_notes(self):
         self.assertEqual(compute_linebreaks([]), set())
         self.assertEqual(compute_linebreaks(notes(["one "])), set())

@@ -297,8 +297,9 @@ After the pitch detection the notes are cleaned up. All of this is on by default
 * **Octave correction**: single notes and short runs that the pitch detection put an octave too high or too low
   are moved back onto the melody; longer passages that really are sung an octave apart stay.
   Disable with `--disable_octave_correction`.
-* **Line breaks**: a line ends at a rest and at the end of a phrase, is split when it gets too long for the
-  screen, and a line of a word or two that would only flash by joins its neighbour.
+* **Line breaks**: with reference lyrics, a line ends where a line of the lyrics ends and at a rest of a second
+  or more; without them, at a rest and at the end of a phrase. A line longer than 45 characters is split, and
+  a line of a word or two that would only flash by joins its neighbour.
 
 ### Sheet Music
 

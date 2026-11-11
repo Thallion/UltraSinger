@@ -125,6 +125,7 @@ _Not all options working now!_
     --keep_numbers          Numbers will be transcribed as numerics instead of as words
     --lyrics_file           Text file with the lyrics of the song. Its words replace the transcribed ones.
     --disable_lyrics_lookup Do not look the lyrics up at lrclib.net. The lookup is enabled by default.
+    --disable_lyrics_line_times  Do not use the line times of synced lyrics to place lines the transcription missed.
 
     [extra]
     --disable_hyphenation   Disable word hyphenation. Hyphenation is enabled by default.
@@ -226,6 +227,13 @@ transcribed ones before the words are timed, and the lines of the lyrics become 
 * A file named `<input name> (Lyrics).txt` or `<input name>.lyrics.txt` next to the input file is used automatically.
 * Otherwise the lyrics are looked up at [lrclib.net](https://lrclib.net) by artist and title.
   Disable with `--disable_lyrics_lookup`.
+
+Many lyrics at lrclib.net are synced: each line has its time. Whisper leaves out quiet lines, mostly at the end
+of a song, and then squeezes the words of the next line in somewhere else. With the line times, a line that was
+not heard or was timed more than 3 seconds from its place is looked for where the lyrics say it is sung. The
+times only count where they fit the song around the line (the lines before and after lie one common offset from
+their times), so the lyrics of another recording place nothing. A line `[01:23.45] text` in a lyrics file is
+read the same way. Disable with `--disable_lyrics_line_times`.
 
 Lyrics are only used when they fit what was transcribed (at least half of the words in common), so the lyrics
 of another song or version do no harm. Passages that the lyrics lack keep their transcribed words.

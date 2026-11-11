@@ -8,6 +8,7 @@
   - Notes without a sung pitch take the pitch of their neighbour
   - Notes end where their singing ends; note starts move onto the onsets of the vocal track (`--disable_onset_correction`)
   - Syllables start where the forced alignment hears their first letter, and stay notes of their own on the same pitch
+  - Synced lyrics: lines the transcription missed or timed far from their place are looked for at the time of the line (`--disable_lyrics_line_times`)
   - Short "~" notes inside a held syllable join the note they belong to (1.30 -> 1.12 times as many notes as hand-made charts)
   - An mp3 with a cover picture is no longer taken for a video; MusicBrainz requests time out; hits that do not fit the file name are refused
   - Line breaks at rests and phrase ends, long lines are split, lines that flash by are joined

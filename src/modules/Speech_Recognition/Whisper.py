@@ -29,7 +29,12 @@ from torch.cuda import OutOfMemoryError
 from modules.Speech_Recognition.TranscriptionResult import TranscriptionResult
 from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted, red_highlighted
 from modules.Speech_Recognition.TranscribedData import TranscribedData, from_whisper
-from modules.Speech_Recognition.reference_lyrics import choose_lyrics, correct_segments, MIN_MATCH_RATIO
+from modules.Speech_Recognition.reference_lyrics import (
+    MIN_MATCH_RATIO,
+    choose_lyrics,
+    correct_segments,
+    plan_missed_lines,
+)
 
 #Addition for numbers to words
 import re
@@ -230,11 +235,12 @@ def transcribe_with_whisper(
 
         # The words of known lyrics replace the transcribed ones before they are timed
         line_ends = None
+        lyric_indexes = None
         lyrics = choose_lyrics(result["segments"], reference_lyrics or [], lyrics_min_match_ratio)
         if lyrics is not None:
             corrected = correct_segments(result["segments"], lyrics)
             if corrected is not None:
-                result["segments"], line_ends = corrected
+                result["segments"], line_ends, lyric_indexes = corrected
 
         #Addition for numbers to words (Using previous code from louispan in PR#135)
         if keep_numbers == False: 
@@ -251,9 +257,6 @@ def transcribe_with_whisper(
             return_char_alignments=True,
         )
 
-        del model_a
-        free_gpu_memory()
-
         transcribed_data = convert_to_transcribed_data(result_aligned)
 
         # With reference lyrics, the phrases end where the lines of the lyrics end
@@ -261,6 +264,11 @@ def transcribe_with_whisper(
         if has_lyric_lines:
             for data, line_end in zip(transcribed_data, line_ends):
                 data.is_segment_end = line_end
+            transcribed_data = add_missed_lines(
+                transcribed_data, lyrics, lyric_indexes, model_a, metadata, audio, device, language, keep_numbers)
+
+        del model_a
+        free_gpu_memory()
 
         return TranscriptionResult(transcribed_data, detected_language, has_lyric_lines)
     except ValueError as value_error:
@@ -325,6 +333,67 @@ def char_starts_per_word(segment: dict) -> list[list[float | None]] | None:
     if len(groups) != len(words) or any(text != word["word"] for (text, _), word in zip(groups, words)):
         return None
     return [starts for _, starts in groups]
+
+
+# A line the transcription missed is taken when the alignment model hears its words at
+# least this well on average (0 to 1); where nothing is sung it finds them, but badly
+MIN_MISSED_LINE_SCORE = 0.25
+
+
+def add_missed_lines(transcribed_data: list[TranscribedData], lyrics: list, lyric_indexes: list,
+                     align_model, align_metadata, audio, device: str, language: str,
+                     keep_numbers: bool) -> list[TranscribedData]:
+    """Time the lines of synced lyrics that the transcription did not hear.
+
+    Whisper leaves out quiet lines, mostly at the end of a song. The lyrics
+    know their words and the synced lyrics about when they are sung, so the
+    alignment model looks for them there.
+    """
+    placed = {lyric_index: (data.start, data.end)
+              for data, lyric_index in zip(transcribed_data, lyric_indexes) if lyric_index is not None}
+    plan, _ = plan_missed_lines(lyrics, placed, len(audio) / SAMPLE_RATE)
+    if not plan:
+        return transcribed_data
+
+    entries = list(zip(transcribed_data, lyric_indexes))
+    added = 0
+    for segment, line_indexes in plan:
+        if not keep_numbers:
+            segment["text"] = number_to_words(segment["text"], language)
+        try:
+            aligned = whisperx.align([segment], align_model, align_metadata, audio, device,
+                                     return_char_alignments=True)
+        except Exception as exception:  # pylint: disable=broad-except
+            print(f"{ULTRASINGER_HEAD} {red_highlighted('Could not time a missed line:')} {exception}")
+            continue
+        words = [word for aligned_segment in aligned["segments"] for word in aligned_segment["words"]]
+        if not words or any("start" not in word or "end" not in word for word in words):
+            continue
+        score = sum(word.get("score", 0.0) for word in words) / len(words)
+        if score < MIN_MISSED_LINE_SCORE:
+            # not heard there either: words of the line that were timed elsewhere stay where they are
+            continue
+        line = convert_to_transcribed_data(aligned)
+        for data in line:
+            data.is_segment_end = False
+        line[-1].is_segment_end = True
+
+        # words of the line that were squeezed in next to another line go
+        moved = any(lyric_index in line_indexes for _, lyric_index in entries)
+        entries = [(data, lyric_index) for data, lyric_index in entries if lyric_index not in line_indexes]
+        entries.extend((data, None) for data in line)
+        added += 1
+        what = "Moved a line to its place" if moved else "Added a line the transcription did not hear"
+        print(f"{ULTRASINGER_HEAD} {what} at {blue_highlighted(f'{line[0].start:.1f} s')}: {segment['text']}")
+
+    if not added:
+        return transcribed_data
+    transcribed_data = sorted((data for data, _ in entries), key=lambda data: data.start)
+    # a word that ran on through the rest in which a line was found ends where the line starts
+    for data, following in zip(transcribed_data, transcribed_data[1:]):
+        if data.end > following.start:
+            data.end = max(data.start + 0.01, following.start)
+    return transcribed_data
 
 
 def convert_to_transcribed_data(result_aligned):

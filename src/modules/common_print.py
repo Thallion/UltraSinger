@@ -44,6 +44,7 @@ def print_help() -> None:
     --lyrics_file           Text file with the lyrics of the song. Its words replace the transcribed ones and its lines become the lines of the song.
                             A file named "<input name> (Lyrics).txt" next to the input file is used automatically.
     --disable_lyrics_lookup Do not look the lyrics up at lrclib.net. The lookup is enabled by default.
+    --disable_lyrics_line_times  Do not use the line times of synced lyrics to place lines the transcription missed.
     
     [pitcher]
     # SwiftF0 is used; it has no options

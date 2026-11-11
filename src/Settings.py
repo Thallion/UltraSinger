@@ -34,6 +34,7 @@ class Settings:
     # Reference lyrics
     lyrics_file = None  # Text file with the lyrics of the song; its words replace the transcribed ones
     lyrics_lookup = True  # Look the lyrics up at lrclib.net when no lyrics file is given
+    lyrics_line_times = True  # Use the line times of synced lyrics to place lines the transcription missed or misplaced
 
     # Process data Paths
     input_file_path = ""

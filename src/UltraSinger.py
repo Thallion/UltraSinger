@@ -533,6 +533,10 @@ def load_reference_lyrics(process_data) -> tuple[list, float]:
         candidates = fetch_lyrics_from_lrclib(process_data.media_info.artist, process_data.media_info.title)
         if candidates:
             print(f"{ULTRASINGER_HEAD} Found lyrics at {blue_highlighted('lrclib.net')}")
+        if not settings.lyrics_line_times:
+            for lyrics in candidates:
+                for word in lyrics:
+                    word.line_start = word.line_stop = None
         return candidates, MIN_MATCH_RATIO
     return [], MIN_MATCH_RATIO
 
@@ -678,7 +682,8 @@ def transcribe_audio(cache_folder_path: str, processing_audio_path: str,
         whisper_device = "cpu" if settings.force_whisper_cpu else settings.pytorch_device
         transcription_config = f"{settings.transcriber}_{settings.whisper_model.value}_{whisper_device}_{whisper_align_model_string}_{settings.whisper_batch_size}_{settings.whisper_compute_type}_{settings.language}"
         if reference_lyrics:
-            lyrics_text = "//".join(" ".join(word.text + ("/" if word.line_end else "") for word in lyrics)
+            lyrics_text = "//".join(" ".join(word.text + (f"/{word.line_start}" if word.line_end else "")
+                                             for word in lyrics)
                                     for lyrics in reference_lyrics)
             lyrics_text += f"//{lyrics_min_match_ratio}"
             transcription_config += "_lyrics" + hashlib.md5(lyrics_text.encode("utf-8")).hexdigest()[:8]
@@ -926,6 +931,8 @@ def init_settings(argv: list[str]) -> Settings:
             settings.lyrics_file = arg
         elif opt in ("--disable_lyrics_lookup"):
             settings.lyrics_lookup = False
+        elif opt in ("--disable_lyrics_line_times"):
+            settings.lyrics_line_times = False
         elif opt in ("--disable_onset_correction"):
             settings.onset_correction = False
         elif opt in ("--disable_octave_correction"):
@@ -975,6 +982,7 @@ def arg_options():
         "lyrics_file=",
         "denoise",
         "disable_lyrics_lookup",
+        "disable_lyrics_line_times",
         "disable_onset_correction",
         "disable_octave_correction",
     ]

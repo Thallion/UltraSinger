@@ -11,6 +11,7 @@ from src.modules.Speech_Recognition.reference_lyrics import (
     find_lyrics_file,
     match_ratio,
     parse_lyrics,
+    plan_missed_lines,
 )
 
 
@@ -40,12 +41,84 @@ class ParseLyricsTest(unittest.TestCase):
         self.assertEqual([word.text for word in parse_lyrics("Hello - world ...")], ["Hello", "world"])
 
 
+SYNCED = """[00:10.00] one two three
+[00:12.00] four five six
+[00:14.00] seven eight nine
+[00:16.00] ten eleven twelve
+[00:18.00] thirteen fourteen fifteen
+[00:20.00] sixteen seventeen
+[00:22.00]
+[00:40.00] the last line
+[00:43.00]
+"""
+
+
+class SyncedLyricsTest(unittest.TestCase):
+    def test_lines_keep_their_times(self):
+        words = parse_lyrics("[00:10.00] Hello world\n[00:12.50] It's me\n[00:15.00]\n[00:20.00] again")
+        self.assertEqual([(w.text, w.line_start, w.line_stop) for w in words],
+                         [("Hello", 10.0, 12.5), ("world", 10.0, 12.5), ("It's", 12.5, 15.0), ("me", 12.5, 15.0),
+                          ("again", 20.0, None)])
+
+    def test_plain_lyrics_have_no_times(self):
+        self.assertTrue(all(w.line_start is None for w in parse_lyrics("Hello world\nIt's me")))
+
+    def test_a_whole_missed_line_is_left_for_its_time(self):
+        lyrics = parse_lyrics(SYNCED)
+        segments = [{"text": "one two three four five six seven eight nine ten eleven twelve "
+                             "thirteen fourteen fifteen sixteen seventeen", "start": 10.0, "end": 22.0}]
+        corrected, _, lyric_indexes = correct_segments(segments, lyrics)
+        self.assertEqual(lyric_indexes, list(range(17)))
+        self.assertNotIn("last", corrected[0]["text"])
+
+    def placed(self, shift: float = 0.5, skip=()):
+        """Words timed as in SYNCED, moved by ``shift``"""
+        lyrics = parse_lyrics(SYNCED)
+        return lyrics, {i: (w.line_start + shift, w.line_start + shift + 0.3)
+                        for i, w in enumerate(lyrics) if i not in skip}
+
+    def test_a_missed_line_is_searched_at_its_time(self):
+        lyrics, placed = self.placed(skip=(17, 18, 19))
+        plan, misplaced = plan_missed_lines(lyrics, placed, 60.0)
+        self.assertEqual(misplaced, set())
+        self.assertEqual(len(plan), 1)
+        segment, indexes = plan[0]
+        self.assertEqual((segment["text"], indexes), ("the last line", [17, 18, 19]))
+        self.assertAlmostEqual(segment["start"], 40.2)   # 40 s + the offset of 0.5 s - the lead of 0.3 s
+        self.assertAlmostEqual(segment["end"], 43.5)     # where the synced lyrics end the line
+
+    def test_a_line_timed_far_from_its_time_is_misplaced(self):
+        lyrics, placed = self.placed()
+        for index in (17, 18, 19):  # squeezed in right after the line before
+            placed[index] = (21.0 + index * 0.1, 21.05 + index * 0.1)
+        plan, misplaced = plan_missed_lines(lyrics, placed, 60.0)
+        self.assertEqual(misplaced, {17, 18, 19})
+        self.assertEqual([indexes for _, indexes in plan], [[17, 18, 19]])
+
+    def test_a_missed_line_never_lies_over_timed_words(self):
+        lyrics, placed = self.placed(skip=(3, 4, 5))
+        plan, _ = plan_missed_lines(lyrics, placed, 60.0)
+        segment, _ = plan[0]
+        self.assertGreaterEqual(segment["start"], placed[2][1])
+        self.assertLessEqual(segment["end"], placed[6][0])
+
+    def test_times_of_another_recording_are_not_used(self):
+        lyrics, placed = self.placed(skip=(17, 18, 19))
+        for index in placed:  # every line off by another amount
+            placed[index] = (placed[index][0] + (index // 3) * 1.5, placed[index][1] + (index // 3) * 1.5)
+        self.assertEqual(plan_missed_lines(lyrics, placed, 60.0), ([], set()))
+
+    def test_nothing_missed(self):
+        lyrics, placed = self.placed()
+        self.assertEqual(plan_missed_lines(lyrics, placed, 60.0), ([], set()))
+
+
 class CorrectSegmentsTest(unittest.TestCase):
     def test_misheard_words_are_replaced(self):
         segments = [{"text": " I took a walk around the word", "start": 1.0, "end": 4.0},
                     {"text": " to ease my troubled mine", "start": 4.0, "end": 7.0}]
         lyrics = parse_lyrics("I took a walk around the world\nTo ease my troubled mind")
-        corrected, line_ends = correct_segments(segments, lyrics)
+        corrected, line_ends, _ = correct_segments(segments, lyrics)
         self.assertEqual([segment["text"] for segment in corrected],
                          ["I took a walk around the world", "To ease my troubled mind"])
         self.assertEqual((corrected[0]["start"], corrected[1]["end"]), (1.0, 7.0))
@@ -55,14 +128,14 @@ class CorrectSegmentsTest(unittest.TestCase):
     def test_one_word_heard_as_two(self):
         segments = [{"text": "we are the champions my friend and we will keep on fighting", "start": 0, "end": 5}]
         lyrics = parse_lyrics("We are the champions my friend\nAnd we'll keep on fighting")
-        corrected, _ = correct_segments(segments, lyrics)
+        corrected, _, _ = correct_segments(segments, lyrics)
         self.assertEqual(corrected[0]["text"], "We are the champions my friend And we'll keep on fighting")
 
     def test_a_missing_word_is_added_to_the_segment_before(self):
         segments = [{"text": "one two three four", "start": 0, "end": 2},
                     {"text": "six seven eight nine", "start": 2, "end": 4}]
         lyrics = parse_lyrics("one two three four five\nsix seven eight nine")
-        corrected, line_ends = correct_segments(segments, lyrics)
+        corrected, line_ends, _ = correct_segments(segments, lyrics)
         self.assertEqual(corrected[0]["text"], "one two three four five")
         self.assertEqual(lines_of(corrected, line_ends), ["one two three four five", "six seven eight nine"])
 
@@ -72,7 +145,7 @@ class CorrectSegmentsTest(unittest.TestCase):
                     {"text": passage, "start": 2, "end": 6},
                     {"text": "five six seven eight nine ten eleven twelve", "start": 6, "end": 9}]
         lyrics = parse_lyrics("one two three four\nfive six seven eight nine ten eleven twelve")
-        corrected, _ = correct_segments(segments, lyrics)
+        corrected, _, _ = correct_segments(segments, lyrics)
         self.assertEqual([segment["text"] for segment in corrected],
                          ["one two three four", passage, "five six seven eight nine ten eleven twelve"])
 

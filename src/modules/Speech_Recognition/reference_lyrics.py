@@ -32,12 +32,16 @@ MAX_INSERTED_WORDS = 6
 
 _SECTION_LABEL = re.compile(r"^\s*[\[(][^\])]*[\])]\s*$")
 _LRC_TIMESTAMP = re.compile(r"\[\d+:\d+(?:[.:]\d+)?\]")
+_LRC_LINE_TIME = re.compile(r"^\[(\d+):(\d+(?:[.:]\d+)?)\]")
 
 
 @dataclass
 class LyricWord:
     text: str
     line_end: bool = False
+    # Synced lyrics: when the line of the word starts and when the next line starts (seconds)
+    line_start: float | None = None
+    line_stop: float | None = None
 
 
 def normalize(word: str) -> str:
@@ -46,23 +50,40 @@ def normalize(word: str) -> str:
     return "".join(char for char in word if char.isalnum())
 
 
+def _line_time(line: str) -> float | None:
+    """Start time of a line of synced lyrics ("[01:23.45] text"), None for a plain line"""
+    match = _LRC_LINE_TIME.match(line.strip())
+    if match is None:
+        return None
+    return int(match.group(1)) * 60 + float(match.group(2).replace(":", "."))
+
+
 def parse_lyrics(text: str) -> list[LyricWord]:
     """Words of a lyrics text with the ends of its lines.
 
-    Timestamps of synced lyrics, section labels like ``[Chorus]`` and empty
-    lines are left out.
+    Section labels like ``[Chorus]`` and empty lines are left out. The
+    timestamps of synced lyrics (LRC) are kept as the times of the lines; a
+    timestamp without text ends the line before it.
     """
     words = []
+    previous_line = []
     for line in text.splitlines():
+        time = _line_time(line)
         line = _LRC_TIMESTAMP.sub("", line).strip()
+        if time is not None:
+            for word in previous_line:
+                if word.line_stop is None:
+                    word.line_stop = time
         if not line or _SECTION_LABEL.match(line):
+            if time is not None:
+                previous_line = []
             continue
-        line_words = [word for word in line.split() if normalize(word)]
+        line_words = [LyricWord(word, line_start=time) for word in line.split() if normalize(word)]
         if not line_words:
             continue
-        for word in line_words:
-            words.append(LyricWord(word))
-        words[-1].line_end = True
+        line_words[-1].line_end = True
+        words.extend(line_words)
+        previous_line = line_words
     return words
 
 
@@ -140,7 +161,8 @@ def fetch_lyrics_from_lrclib(artist: str | None, title: str | None) -> list[list
             for entry in found if isinstance(found, list) else [found]:
                 if not isinstance(entry, dict) or entry.get("instrumental"):
                     continue
-                text = entry.get("plainLyrics") or entry.get("syncedLyrics")
+                # synced lyrics have the times of the lines, which place lines the transcription missed
+                text = entry.get("syncedLyrics") or entry.get("plainLyrics")
                 words = parse_lyrics(text) if text else []
                 key = " ".join(normalize(word.text) for word in words)
                 if words and key not in seen:
@@ -194,7 +216,26 @@ def choose_lyrics(segments: list[dict], candidates: list[list[LyricWord]],
     return max(fitting, key=lambda lyric_words: matched_words(transcribed, lyric_words))
 
 
-def correct_segments(segments: list[dict], lyric_words: list[LyricWord]) -> tuple[list[dict], list[bool]] | None:
+def whole_timed_lines(lyric_words: list[LyricWord], first: int, stop: int) -> set[int]:
+    """Indexes of the words in ``first:stop`` whose whole line lies in that range and has a start time"""
+    indexes = set()
+    line = []
+    for index in range(first, stop):
+        starts_line = index == 0 or lyric_words[index - 1].line_end
+        if starts_line:
+            line = []
+        elif not line:
+            continue  # the line began before the range
+        line.append(index)
+        if lyric_words[index].line_end:
+            if lyric_words[index].line_start is not None:
+                indexes.update(line)
+            line = []
+    return indexes
+
+
+def correct_segments(segments: list[dict],
+                     lyric_words: list[LyricWord]) -> tuple[list[dict], list[bool], list[int | None]] | None:
     """Replace the text of the transcription segments with the words of the lyrics.
 
     Args:
@@ -203,8 +244,10 @@ def correct_segments(segments: list[dict], lyric_words: list[LyricWord]) -> tupl
 
     Returns:
         The segments with the corrected text and, for every word of them in
-        order, whether a line of the lyrics ends with it. None when the lyrics
-        do not fit the transcription.
+        order, whether a line of the lyrics ends with it and which word of
+        the lyrics it is (None for a kept transcribed word). None when there
+        is nothing to correct. Whole lines of synced lyrics that the
+        transcription lacks are left out: plan_missed_lines places them.
     """
     transcribed = []  # (word, segment index)
     for index, segment in enumerate(segments):
@@ -218,42 +261,169 @@ def correct_segments(segments: list[dict], lyric_words: list[LyricWord]) -> tupl
     matcher = SequenceMatcher(None, [normalize(word) for word, _ in transcribed],
                               [normalize(word.text) for word in lyric_words], autojunk=False)
 
-    # (text, line end, segment index) of every word of the result
-    result: list[tuple[str, bool, int]] = []
+    # (text, line end, segment index, index in the lyrics) of every word of the result
+    result: list[tuple[str, bool, int, int | None]] = []
     replaced = 0
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             for k in range(i2 - i1):
                 lyric = lyric_words[j1 + k]
-                result.append((lyric.text, lyric.line_end, transcribed[i1 + k][1]))
+                result.append((lyric.text, lyric.line_end, transcribed[i1 + k][1], j1 + k))
         elif tag == "replace":
             # the words of the lyrics share the place of the transcribed ones
             for k in range(j1, j2):
                 source = i1 + (k - j1) * (i2 - i1) // (j2 - j1)
-                result.append((lyric_words[k].text, lyric_words[k].line_end, transcribed[source][1]))
+                result.append((lyric_words[k].text, lyric_words[k].line_end, transcribed[source][1], k))
             replaced += j2 - j1
         elif tag == "delete":
             if i2 - i1 >= KEEP_UNMATCHED_WORDS:
                 for k in range(i1, i2):
-                    result.append((transcribed[k][0], False, transcribed[k][1]))
+                    result.append((transcribed[k][0], False, transcribed[k][1], None))
         elif tag == "insert":
-            if j2 - j1 <= MAX_INSERTED_WORDS:
+            missed_lines = whole_timed_lines(lyric_words, j1, j2)
+            added = [k for k in range(j1, j2) if k not in missed_lines]
+            if 0 < len(added) <= MAX_INSERTED_WORDS:
                 index = transcribed[i1 - 1][1] if i1 > 0 else transcribed[0][1]
-                for k in range(j1, j2):
-                    result.append((lyric_words[k].text, lyric_words[k].line_end, index))
-                replaced += j2 - j1
+                for k in added:
+                    result.append((lyric_words[k].text, lyric_words[k].line_end, index, k))
+                replaced += len(added)
 
     corrected = []
     line_ends = []
+    lyric_indexes = []
     for index, segment in enumerate(segments):
-        words = [(text, line_end) for text, line_end, segment_index in result if segment_index == index]
+        words = [entry for entry in result if entry[2] == index]
         if not words:
             continue
         new_segment = dict(segment)
-        new_segment["text"] = " ".join(text for text, _ in words)
+        new_segment["text"] = " ".join(entry[0] for entry in words)
         corrected.append(new_segment)
-        line_ends.extend(line_end for _, line_end in words)
+        line_ends.extend(entry[1] for entry in words)
+        lyric_indexes.extend(entry[3] for entry in words)
 
     print(f"{ULTRASINGER_HEAD} Using the reference lyrics: {blue_highlighted(f'{ratio:.0%}')} of the words "
           f"fit the transcription, {blue_highlighted(str(replaced))} words corrected")
-    return corrected, line_ends
+    return corrected, line_ends, lyric_indexes
+
+
+# Synced lyrics place a line only when their times fit the song around it: the
+# nearest lines found in both have to lie this close (seconds) around one common offset
+MAX_OFFSET_SPREAD_SECONDS = 0.75
+OFFSET_NEIGHBOURS = 3  # lines on each side
+MIN_LINES_FOR_OFFSET = 3
+WORD_BEFORE_MIN_SECONDS = 0.3
+# A missed line is searched from this long before its time on
+MISSED_LINE_LEAD_SECONDS = 0.3
+# ... for at most this long per word, plus a fixed time
+MISSED_LINE_SECONDS_PER_WORD = 1.2
+MISSED_LINE_EXTRA_SECONDS = 1.5
+MISSED_LINE_MIN_SECONDS_PER_WORD = 0.15
+# A line whose words were timed further than this from the time of the line is misplaced
+MISPLACED_LINE_SECONDS = 3.0
+
+
+def plan_missed_lines(lyric_words: list[LyricWord], placed: dict[int, tuple[float, float]],
+                      audio_seconds: float) -> tuple[list[tuple[dict, list[int]]], set[int]]:
+    """Where to look for the lines of synced lyrics that the transcription did not hear.
+
+    A line counts as not heard as well when its words were timed far from the
+    time of the line: the transcription then lacked the line, and its words
+    were squeezed in next to another line.
+
+    Args:
+        lyric_words: Words of the lyrics
+        placed: Start and end time of the words of the lyrics that were timed, by their index
+        audio_seconds: Length of the audio
+
+    Returns:
+        For each missed line a segment (``text``, ``start``, ``end``) for the
+        forced alignment and the indexes of its words; and the indexes of the
+        timed words that were misplaced and have to go. A line stays as it is
+        where the times of the lyrics do not fit the song around it.
+    """
+    lines = []
+    line = []
+    for index, word in enumerate(lyric_words):
+        line.append(index)
+        if word.line_end:
+            lines.append(line)
+            line = []
+    if line:
+        lines.append(line)
+    timed_lines = [line for line in lines if lyric_words[line[0]].line_start is not None]
+
+    # How far each line that was timed lies from its time in the lyrics. The offset
+    # may change within the song (a video with an interlude the album version lacks),
+    # so a line is compared with the lines around it, not with the whole song.
+    offsets = {}
+    for number, line in enumerate(timed_lines):
+        timed = [index for index in line if index in placed]
+        if timed:
+            offsets[number] = placed[timed[0]][0] - lyric_words[line[0]].line_start
+
+    def local_offset(number: int, known: dict[int, float]) -> float | None:
+        """Median offset of the nearest lines around a line, None when they do not agree"""
+        before = [known[k] for k in sorted(known) if k < number][-OFFSET_NEIGHBOURS:]
+        after = [known[k] for k in sorted(known) if k > number][:OFFSET_NEIGHBOURS]
+        near = sorted(before + after)
+        if len(near) < MIN_LINES_FOR_OFFSET:
+            return None
+        median = near[len(near) // 2]
+        spread = sorted(abs(value - median) for value in near)[len(near) // 2]
+        if spread > MAX_OFFSET_SPREAD_SECONDS:
+            return None
+        return median
+
+    # A misplaced line hides the next one, as it is one of its neighbours: look
+    # again without the lines found, until no more turn up
+    good_offsets = dict(offsets)
+    while True:
+        found = {number for number in good_offsets
+                 if (expected := local_offset(number, good_offsets)) is not None
+                 and abs(good_offsets[number] - expected) > MISPLACED_LINE_SECONDS}
+        if not found:
+            break
+        # the worst one first: taking all at once would also take good lines next to bad ones
+        worst = max(found, key=lambda number: abs(good_offsets[number] - local_offset(number, good_offsets)))
+        del good_offsets[worst]
+
+    misplaced = set()
+    missed = []  # (line, offset)
+    for number, line in enumerate(timed_lines):
+        if number in good_offsets:
+            continue
+        offset = local_offset(number, good_offsets)
+        if offset is None:
+            continue  # nothing reliable around the line: it stays as it is
+        misplaced.update(index for index in line if index in placed)
+        missed.append((line, offset))
+    if not missed:
+        return [], set()
+
+    placed = {index: times for index, times in placed.items() if index not in misplaced}
+    placed_indexes = sorted(placed)
+    plan = []
+    for line, offset in missed:
+        first = lyric_words[line[0]]
+        start = first.line_start + offset - MISSED_LINE_LEAD_SECONDS
+        longest = MISSED_LINE_LEAD_SECONDS + MISSED_LINE_SECONDS_PER_WORD * len(line) + MISSED_LINE_EXTRA_SECONDS
+        stop = min(start + longest, audio_seconds)
+        if first.line_stop is not None:
+            stop = min(stop, first.line_stop + offset)
+
+        # never over words that have their time already; the word before may be cut
+        # short, as the alignment lets the last word before a rest run on through it
+        before = [index for index in placed_indexes if index < line[0]]
+        after = [index for index in placed_indexes if index > line[-1]]
+        if before:
+            start = max(start, min(placed[before[-1]][1], placed[before[-1]][0] + WORD_BEFORE_MIN_SECONDS))
+        if after:
+            stop = min(stop, placed[after[0]][0])
+        if stop - start < MISSED_LINE_MIN_SECONDS_PER_WORD * len(line):
+            continue
+        text = " ".join(lyric_words[index].text for index in line)
+        plan.append(({"text": text, "start": round(max(0.0, start), 3), "end": round(stop, 3)}, line))
+        # the next missed line must not lie over this one
+        placed[line[-1]] = (start, stop)
+        placed_indexes = sorted(placed)
+    return plan, misplaced

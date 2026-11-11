@@ -284,6 +284,8 @@ After the pitch detection the notes are cleaned up. All of this is on by default
 * **Syllable timing**: the syllables of a word start where their first letter is sung (taken from the forced
   alignment), instead of sharing the time of the word evenly. Syllables stay notes of their own, also on the same pitch.
 * **Unvoiced notes**: a note without a sung pitch (a consonant, a breath) takes the pitch of its neighbour instead of a random one.
+* **Held syllables**: a syllable held over several tones gets a `~` note per tone. A `~` note shorter than
+  0.2 s (an ornament, a slide, a wobble around the border of two notes) joins the note it belongs to.
 * **Octave correction**: single notes and short runs that the pitch detection put an octave too high or too low
   are moved back onto the melody; longer passages that really are sung an octave apart stay.
   Disable with `--disable_octave_correction`.

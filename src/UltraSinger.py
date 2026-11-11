@@ -39,6 +39,7 @@ from modules.console_colors import (
 )
 from modules.Midi.midi_creator import (
     create_midi_segments_from_transcribed_data,
+    simplify_melismas,
     create_repitched_midi_segments_from_ultrastar_txt,
     create_midi_file,
 )
@@ -276,6 +277,8 @@ def run() -> tuple[str, Score, Score]:
         process_data.midi_segments, process_data.transcribed_data = merge_syllable_segments(process_data.midi_segments,
                                                                                         process_data.transcribed_data,
                                                                                         process_data.media_info.bpm)
+        process_data.midi_segments = simplify_melismas(process_data.midi_segments, process_data.pitched_data,
+                                                       allowed_notes_for_key)
         if settings.octave_correction:
             process_data.midi_segments = correct_octaves(process_data.midi_segments)
 

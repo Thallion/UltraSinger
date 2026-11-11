@@ -10,9 +10,11 @@ from src.modules.Midi.midi_creator import (
     estimate_tuning,
     find_nearest_index,
     pitch_to_note,
+    simplify_melismas,
     weighted_median_note,
     weighted_median_pitch,
 )
+from src.modules.Midi.MidiSegment import MidiSegment
 from src.modules.Pitcher.pitched_data import PitchedData
 
 
@@ -86,6 +88,67 @@ class CreateMidiNoteTest(unittest.TestCase):
 
     def test_empty_transcription_gives_no_notes(self):
         self.assertEqual(create_midi_segments_from_transcribed_data([], self.pitched_data), [])
+
+
+class SimplifyMelismasTest(unittest.TestCase):
+    FRAME = 0.016
+
+    def pitched(self, tones: list[tuple[float, float, float]]) -> PitchedData:
+        """Pitch data of sung tones given as (start, end, midi pitch)"""
+        times = [i * self.FRAME for i in range(int(4 / self.FRAME))]
+        frequencies, confidence = [], []
+        for time in times:
+            tone = next((midi for start, end, midi in tones if start <= time < end), None)
+            frequencies.append(hz(tone) if tone is not None else 100.0)
+            confidence.append(0.9 if tone is not None else 0.0)
+        return PitchedData(times, frequencies, confidence)
+
+    def test_a_short_ornament_joins_the_note_before(self):
+        pitched = self.pitched([(1.0, 1.6, 60), (1.6, 1.7, 62), (1.7, 2.0, 60)])
+        segments = [MidiSegment("C4", 1.0, 1.6, "you", True, 60.0), MidiSegment("D4", 1.6, 1.7, "~", True, 62.0),
+                    MidiSegment("C4", 1.7, 2.0, "~ ", True, 60.0)]
+
+        result = simplify_melismas(segments, pitched)
+
+        self.assertEqual([(s.word, s.note, s.start, s.end) for s in result], [("you ", "C4", 1.0, 2.0)])
+
+    def test_a_wobble_around_the_border_of_two_notes_is_one_note(self):
+        pitched = self.pitched([(1.0, 1.5, 60.4), (1.5, 2.0, 60.6)])
+        segments = [MidiSegment("C4", 1.0, 1.5, "you", True, 60.4), MidiSegment("C#4", 1.5, 2.0, "~ ", True, 60.6)]
+
+        result = simplify_melismas(segments, pitched)
+
+        self.assertEqual([(s.word, s.start, s.end) for s in result], [("you ", 1.0, 2.0)])
+
+    def test_two_held_tones_stay_two_notes(self):
+        pitched = self.pitched([(1.0, 1.5, 60), (1.5, 2.0, 64)])
+        segments = [MidiSegment("C4", 1.0, 1.5, "you", True, 60.0), MidiSegment("E4", 1.5, 2.0, "~ ", True, 64.0)]
+
+        result = simplify_melismas(segments, pitched)
+
+        self.assertEqual([s.note for s in result], ["C4", "E4"])
+
+    def test_a_short_first_note_joins_the_tone_it_slides_into(self):
+        pitched = self.pitched([(1.0, 1.1, 57), (1.1, 2.0, 60)])
+        segments = [MidiSegment("A3", 1.0, 1.1, "you", True, 57.0), MidiSegment("C4", 1.1, 2.0, "~ ", True, 60.0)]
+
+        result = simplify_melismas(segments, pitched)
+
+        self.assertEqual([(s.word, s.note, s.start) for s in result], [("you ", "C4", 1.0)])
+
+    def test_short_syllables_stay_notes_of_their_own(self):
+        pitched = self.pitched([(1.0, 1.1, 60), (1.1, 1.2, 62)])
+        segments = [MidiSegment("C4", 1.0, 1.1, "bo", True, 60.0), MidiSegment("D4", 1.1, 1.2, "dy ", True, 62.0)]
+
+        result = simplify_melismas(segments, pitched)
+
+        self.assertEqual([s.word for s in result], ["bo", "dy "])
+
+    def test_a_tilde_after_a_rest_is_left_alone(self):
+        pitched = self.pitched([(1.0, 1.5, 60), (2.0, 2.1, 60)])
+        segments = [MidiSegment("C4", 1.0, 1.5, "you", True, 60.0), MidiSegment("C4", 2.0, 2.1, "~ ", True, 60.0)]
+
+        self.assertEqual(len(simplify_melismas(segments, pitched)), 2)
 
 
 class FindNearestIndexTest(unittest.TestCase):

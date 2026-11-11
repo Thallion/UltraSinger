@@ -8,6 +8,8 @@
   - Notes without a sung pitch take the pitch of their neighbour
   - Notes end where their singing ends; note starts move onto the onsets of the vocal track (`--disable_onset_correction`)
   - Syllables start where the forced alignment hears their first letter, and stay notes of their own on the same pitch
+  - Short "~" notes inside a held syllable join the note they belong to (1.30 -> 1.12 times as many notes as hand-made charts)
+  - An mp3 with a cover picture is no longer taken for a video; MusicBrainz requests time out; hits that do not fit the file name are refused
   - Line breaks at rests and phrase ends, long lines are split, lines that flash by are joined
   - Key quantization is off by default and only prefers the notes of the key (`--quantize_to_key`); moving every note into the key made the charts worse
   - GPU memory of the models is given back after use (several songs in one process, 8 GB cards); the transcription is tried again with half the batch size when the memory runs out

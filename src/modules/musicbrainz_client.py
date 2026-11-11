@@ -63,6 +63,11 @@ def search_musicbrainz(title: str, artist) -> SongInfo:
     else:
         recording = __multi_line_search(artist, title)
 
+    if recording is not None and not __title_fits(recording['title'], origin_title, origin_artist):
+        print(f"{ULTRASINGER_HEAD} {red_highlighted('Musicbrainz found')} {recording['artist-credit-phrase']} - "
+              f"{recording['title']} {red_highlighted('which does not fit the file name')}")
+        recording = None
+
     if recording is None:
         print(f"{ULTRASINGER_HEAD} {red_highlighted('No match found')} - keeping the given artist and title")
         return SongInfo(title=origin_title, artist=origin_artist or "Unknown Artist")
@@ -120,6 +125,29 @@ def __single_line_search(search_string):
             recording = record
 
     return recording
+
+
+MIN_TITLE_SIMILARITY = 0.6
+
+
+def __title_fits(found_title: str, title: str, artist: str | None) -> bool:
+    """Whether a found recording is the song of the file name.
+
+    The file name may be "Artist - Title" or "Title - Artist", and a first
+    hit of a loose search can be any song, so the found title has to be
+    similar to one of the two parts.
+    """
+    found = __clean_string(found_title)
+    for part in (title, artist):
+        if not part:
+            continue
+        cleaned = __clean_string(part)
+        # a single search string holds artist, title and additions like "FULL HD"
+        if found and found in cleaned:
+            return True
+        if ratio(found, cleaned) >= MIN_TITLE_SIMILARITY:
+            return True
+    return False
 
 
 def __filter_words(search_string):

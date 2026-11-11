@@ -9,8 +9,8 @@
 #   Text bei lrclib.net gesucht; abschalten mit --disable_lyrics_lookup).
 # - Existiert zu einer MP3 eine gleichnamige MP4, wird nur die MP4 verarbeitet.
 # - Die Ergebnisse landen im selben Ordner. TXT-Dateien, die UltraSinger in
-#   einem frueheren Lauf erzeugt hat, werden vorher entfernt; alle anderen
-#   Dateien bleiben unberuehrt.
+#   einem frueheren Lauf erzeugt hat, werden vorher entfernt; die anderen
+#   Ergebnisdateien werden ueberschrieben, alles andere bleibt unberuehrt.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SONG_DIR="${1%/}"
@@ -51,7 +51,8 @@ for f in "$SONG_DIR"/*.txt; do
         rm -f "$f"
     fi
 done
-rm -f "$SONG_DIR"/*"[CO].jpg" "$SONG_DIR"/*"[Vocals]."* "$SONG_DIR"/*"[Instrumental]."* "$SONG_DIR"/*.mid
+# Cover, [Vocals], [Instrumental] und .mid werden vom neuen Lauf ueberschrieben;
+# sie vorher zu loeschen wuerde ein Cover kosten, wenn MusicBrainz diesmal keins findet
 
 # Eingabedateien: MP4s mit Tonspur, dazu MP3s ohne gleichnamige MP4 mit Tonspur.
 # (Eine MP4 ohne Tonspur ist das Video, das ein frueherer Lauf erzeugt hat: sie

@@ -1,3 +1,5 @@
+import socket
+
 import musicbrainzngs
 import string
 import time
@@ -34,13 +36,23 @@ def __clean_string(s: str) -> str:
     return s.translate(str.maketrans('', '', string.punctuation)).lower().strip()
 
 
+# Seconds a MusicBrainz or Cover Art Archive connection may stay silent. musicbrainzngs
+# sets no timeout of its own, so a stalled download of a cover hung the whole run.
+REQUEST_TIMEOUT_SECONDS = 30
+
+
 def __musicbrainz_request(func):
-    for i in range(MAX_RETRIES):
-        try:
-            return func()
-        except musicbrainzngs.musicbrainz.NetworkError:
-            time.sleep(1)
-    return None
+    previous_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(REQUEST_TIMEOUT_SECONDS)
+    try:
+        for i in range(MAX_RETRIES):
+            try:
+                return func()
+            except (musicbrainzngs.musicbrainz.NetworkError, socket.timeout, TimeoutError):
+                time.sleep(1)
+        return None
+    finally:
+        socket.setdefaulttimeout(previous_timeout)
 
 
 def search_musicbrainz(title: str, artist) -> SongInfo:

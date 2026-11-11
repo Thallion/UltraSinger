@@ -147,6 +147,7 @@ def add_hyphen_to_data(
                 dup.word = syllable
                 dup.is_hyphen = True
                 dup.is_word_end = j == len(syllables) - 1
+                dup.is_segment_end = data.is_segment_end and dup.is_word_end
                 new_data.append(dup)
 
     return new_data
@@ -237,6 +238,10 @@ def run() -> tuple[str, Score, Score]:
             process_data.transcribed_data = snap_to_onsets(process_data.transcribed_data, onsets)
         process_data.transcribed_data = split_syllables_into_segments(process_data.transcribed_data,
                                                                   process_data.media_info.bpm)
+
+        # The phrase ends are taken after the notes got their final times: the onset
+        # correction may start the next word before the old end of the word before
+        process_data.phrase_end_times = [data.end for data in process_data.transcribed_data if data.is_segment_end]
 
     # Create audio chunks
     if settings.create_audio_chunks:
@@ -331,6 +336,7 @@ def split_syllables_into_segments(
             first_segment.word = first_segment.word[:-1]
 
         first_segment.is_word_end = False
+        first_segment.is_segment_end = False
         new_data.append(first_segment)
 
         full_segments, partial_segment = divmod(remainder, syllable_segment_size)
@@ -368,6 +374,7 @@ def split_syllables_into_segments(
         if has_space:
             new_data[-1].word += " "
             new_data[-1].is_word_end = True
+        new_data[-1].is_segment_end = data.is_segment_end
     return new_data
 
 
@@ -541,11 +548,9 @@ def TranscribeAudio(process_data):
     # Phrases end with the lines of the reference lyrics, else where the
     # transcription ends a sentence or sets a punctuation mark
     process_data.has_lyric_lines = transcription_result.has_lyric_lines
-    process_data.phrase_end_times = [
-        data.end for data in process_data.transcribed_data
-        if data.is_segment_end or (not transcription_result.has_lyric_lines
-                                   and data.word.rstrip(" ").endswith(PHRASE_END_PUNCTUATION))
-    ]
+    for data in process_data.transcribed_data:
+        data.is_segment_end = data.is_segment_end or (
+            not transcription_result.has_lyric_lines and data.word.rstrip(" ").endswith(PHRASE_END_PUNCTUATION))
 
     # Hyphen
     # Todo: Is it really unnecessary?

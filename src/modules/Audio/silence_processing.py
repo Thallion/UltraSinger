@@ -34,92 +34,104 @@ def remove_silence(silence_parts_list: list[tuple[float, float]], transcribed_da
 
     for data in transcribed_data:
         new_transcribed_data.append(data)
+        __remove_silence_from_word(data, silence_parts_list, new_transcribed_data)
 
-        origin_end = data.end
-        was_split = False
+        # The last piece that is left of the word ends its phrase
+        # (a word that lay completely in a silence is gone: the piece before it takes over)
+        if data.is_segment_end and new_transcribed_data and new_transcribed_data[-1] is not data:
+            data.is_segment_end = False
+            new_transcribed_data[-1].is_segment_end = True
+    return new_transcribed_data
 
-        for silence_start, silence_end in silence_parts_list:
 
-            # |    ****    | silence
-            # |  **    **  | data
-            # |0 1 2 3 4 5 | time
-            if silence_start > origin_end or silence_end < data.start:
-                continue
+def __remove_silence_from_word(data: TranscribedData, silence_parts_list: list[tuple[float, float]],
+                                new_transcribed_data: list[TranscribedData]) -> None:
+    """Cut the silent parts out of one word; the parts after a silence are appended as "~" pieces"""
 
-            # |    **  **    | silence
-            # |  **********  | data
-            # |0 1 2 3 4 5 6 | time
-            if silence_start >= data.start and silence_end <= origin_end:
-                next_index = silence_parts_list.index((silence_start, silence_end)) + 1
-                if next_index < len(silence_parts_list) and silence_parts_list[next_index][0] < origin_end:
-                    split_end = silence_parts_list[next_index][0]
+    origin_end = data.end
+    was_split = False
 
-                    if silence_parts_list[next_index][1] >= origin_end:
-                        split_word = "~ "
-                        is_word_end = True
-                    else:
-                        split_word = "~"
-                        is_word_end = False
-                else:
-                    split_end = origin_end
+    for silence_start, silence_end in silence_parts_list:
+
+        # |    ****    | silence
+        # |  **    **  | data
+        # |0 1 2 3 4 5 | time
+        if silence_start > origin_end or silence_end < data.start:
+            continue
+
+        # |    **  **    | silence
+        # |  **********  | data
+        # |0 1 2 3 4 5 6 | time
+        if silence_start >= data.start and silence_end <= origin_end:
+            next_index = silence_parts_list.index((silence_start, silence_end)) + 1
+            if next_index < len(silence_parts_list) and silence_parts_list[next_index][0] < origin_end:
+                split_end = silence_parts_list[next_index][0]
+
+                if silence_parts_list[next_index][1] >= origin_end:
                     split_word = "~ "
                     is_word_end = True
+                else:
+                    split_word = "~"
+                    is_word_end = False
+            else:
+                split_end = origin_end
+                split_word = "~ "
+                is_word_end = True
 
-                split_data = TranscribedData(confidence=data.confidence, word=split_word, end=split_end, start=silence_end, is_word_end=is_word_end)
+            split_data = TranscribedData(confidence=data.confidence, word=split_word, end=split_end, start=silence_end, is_word_end=is_word_end)
 
-                if not was_split:
-                    data.end = silence_start
-
-                    if data.end - data.start < 0.1:
-                        data.start = silence_end
-                        data.end = split_end
-                        continue
-
-                    if split_data.end - split_data.start <= 0.1:
-                        continue
-
-                    data.is_word_end = False
-
-                    # Remove last whitespace from the data.word
-                    if data.word[-1] == " ":
-                        data.word = data.word[:-1]
-
-                if split_data.end - split_data.start > 0.1:
-                    was_split = True
-                    new_transcribed_data.append(split_data)
-                elif split_word == "~ " and not data.is_word_end:
-                    if new_transcribed_data[-1].word[-1] != " ":
-                        new_transcribed_data[-1].word += " "
-                    new_transcribed_data[-1].is_word_end = True
-
-                continue
-
-            # |    ****  | silence
-            # |     **   | data
-            # |0 1 2 3 4 | time
-            if silence_start < data.start and silence_end > origin_end:
-                new_transcribed_data.remove(data)
-                break
-
-            # |    ****    | silence
-            # |      ****  | data
-            # |0 1 2 3 4 5 | time
-            if silence_start < data.start:
-                data.start = silence_end
-
-            # |    ****  | silence
-            # |  ****    | data
-            # |0 1 2 3 4 | time
-            if silence_end > origin_end:
+            if not was_split:
                 data.end = silence_start
 
-            # |    ****  | silence
-            # |  **      | data
-            # |0 1 2 3 4 | time
-            if silence_start > origin_end:
-                # Nothing to do with this word anymore, go to next word
-                break
-    return new_transcribed_data
+                if data.end - data.start < 0.1:
+                    data.start = silence_end
+                    data.end = split_end
+                    continue
+
+                if split_data.end - split_data.start <= 0.1:
+                    continue
+
+                data.is_word_end = False
+
+                # Remove last whitespace from the data.word
+                if data.word[-1] == " ":
+                    data.word = data.word[:-1]
+
+            if split_data.end - split_data.start > 0.1:
+                was_split = True
+                new_transcribed_data.append(split_data)
+            elif split_word == "~ " and not data.is_word_end:
+                if new_transcribed_data[-1].word[-1] != " ":
+                    new_transcribed_data[-1].word += " "
+                new_transcribed_data[-1].is_word_end = True
+
+            continue
+
+        # |    ****  | silence
+        # |     **   | data
+        # |0 1 2 3 4 | time
+        if silence_start < data.start and silence_end > origin_end:
+            new_transcribed_data.remove(data)
+            break
+
+        # |    ****    | silence
+        # |      ****  | data
+        # |0 1 2 3 4 5 | time
+        if silence_start < data.start:
+            data.start = silence_end
+
+        # |    ****  | silence
+        # |  ****    | data
+        # |0 1 2 3 4 | time
+        if silence_end > origin_end:
+            data.end = silence_start
+
+        # |    ****  | silence
+        # |  **      | data
+        # |0 1 2 3 4 | time
+        if silence_start > origin_end:
+            # Nothing to do with this word anymore, go to next word
+            break
 
 
 def mute_no_singing_parts(mono_output_path, mute_output_path):

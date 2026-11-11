@@ -72,21 +72,31 @@ def remove_audio_from_video(input_video_path: str, output_video_path: str) -> No
 
 
 def is_video_file(file_path: str) -> bool:
-    """Check if file contains video streams using ffprobe"""
+    """Check if file contains a real video stream using ffprobe.
+
+    The cover picture of an audio file (an mp3 with album art) is a video
+    stream too, marked as attached picture; it does not count.
+    """
     try:
         _, ffprobe_path = get_ffmpeg_and_ffprobe_paths()
 
         cmd = [
             ffprobe_path,
             "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_type",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-select_streams", "v",
+            "-show_entries", "stream=codec_type:stream_disposition=attached_pic",
+            "-of", "csv=p=0",
             file_path
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True)
-        return result.returncode == 0 and result.stdout.strip() == "video"
+        if result.returncode != 0:
+            return False
+        for line in result.stdout.splitlines():
+            fields = [field.strip() for field in line.split(",")]
+            if fields and fields[0] == "video" and (len(fields) < 2 or fields[1] != "1"):
+                return True
+        return False
     except Exception:
         return False
 

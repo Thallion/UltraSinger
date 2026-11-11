@@ -4,6 +4,7 @@ import unittest
 
 from src.UltraSinger import (
     add_hyphen_to_data,
+    split_syllables_into_segments,
     merge_syllable_segments,
     remove_unecessary_punctuations,
     syllable_start_times,
@@ -44,6 +45,19 @@ class SyllableTimesTest(unittest.TestCase):
         data = [TranscribedData(word="Hi, ", start=1.0, end=2.0, char_starts=[1.0, 1.5, 1.9])]
         remove_unecessary_punctuations(data)
         self.assertEqual((data[0].word, data[0].char_starts), ("Hi ", [1.0, 1.5]))
+
+
+class PhraseEndTest(unittest.TestCase):
+    def test_only_the_last_syllable_ends_the_phrase(self):
+        data = [TranscribedData(word="around ", start=1.0, end=2.0, is_segment_end=True)]
+        result = add_hyphen_to_data(data, [["a", "round "]])
+        self.assertEqual([d.is_segment_end for d in result], [False, True])
+
+    def test_the_last_segment_of_a_long_syllable_ends_the_phrase(self):
+        data = [TranscribedData(word="you ", start=1.0, end=2.0, is_segment_end=True)]
+        result = split_syllables_into_segments(data, 120)
+        self.assertGreater(len(result), 1)
+        self.assertEqual([d.is_segment_end for d in result], [False] * (len(result) - 1) + [True])
 
 
 class MergeSyllableSegmentsTest(unittest.TestCase):

@@ -189,3 +189,15 @@ class SilenceProcessingTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhraseEndAfterSilenceTest(unittest.TestCase):
+    def test_the_piece_after_a_silence_ends_the_phrase(self):
+        from src.modules.Audio.silence_processing import remove_silence
+        from src.modules.Speech_Recognition.TranscribedData import TranscribedData
+
+        data = [TranscribedData(word="la ", start=1.0, end=3.0, is_segment_end=True)]
+        result = remove_silence([(1.5, 2.0)], data)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual([d.is_segment_end for d in result], [False, True])

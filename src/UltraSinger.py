@@ -4,6 +4,7 @@ import copy
 import getopt
 import hashlib
 import os
+import re
 import sys
 import Levenshtein
 import librosa
@@ -720,6 +721,8 @@ def infos_from_audio_video_input_file() -> tuple[str, str, str, MediaInfo]:
     basename_without_ext = os.path.splitext(basename)[0]
 
     artist, title = None, None
+    # "Artist – Title" with an en or em dash is as common as with a hyphen
+    basename_without_ext = re.sub(r"\s+[–—]\s+", " - ", basename_without_ext)
     if " - " in basename_without_ext:
         artist, title = basename_without_ext.split(" - ", 1)
     else:

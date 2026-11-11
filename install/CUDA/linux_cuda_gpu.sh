@@ -31,7 +31,7 @@ uv sync --extra linux
 
 # Install PyTorch with CUDA support
 echo "Installing PyTorch with CUDA support..."
-uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --force-reinstall
+uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --reinstall-package torch --reinstall-package torchvision --reinstall-package torchaudio
 
 echo "Installation completed successfully!"
 echo "To run UltraSinger:"

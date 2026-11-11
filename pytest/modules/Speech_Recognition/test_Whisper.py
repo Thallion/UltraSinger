@@ -2,7 +2,7 @@
 
 import unittest
 from src.modules.Speech_Recognition.TranscribedData import TranscribedData
-from src.modules.Speech_Recognition.Whisper import convert_to_transcribed_data, number_to_words
+from src.modules.Speech_Recognition.Whisper import char_starts_per_word, convert_to_transcribed_data, number_to_words
 
 class ConvertToTranscribedDataTest(unittest.TestCase):
     def test_convert_to_transcribed_data(self):
@@ -48,6 +48,38 @@ class ConvertToTranscribedDataTest(unittest.TestCase):
             self.assertEqual(transcribed_data[i].end, expected_output[i].end)
             self.assertEqual(transcribed_data[i].start, expected_output[i].start)
             self.assertEqual(transcribed_data[i].is_hyphen, expected_output[i].is_hyphen)
+
+    def test_word_without_timestamp_follows_the_word_before(self):
+        result_aligned = {"segments": [{"words": [
+            {"word": "in", "start": 1.0, "end": 1.5, "score": 0.9},
+            {"word": "2014"},
+            {"word": "we", "start": 2.5, "end": 3.0, "score": 0.9},
+        ]}]}
+
+        transcribed_data = convert_to_transcribed_data(result_aligned)
+
+        self.assertEqual([data.word for data in transcribed_data], ["in ", "2014 ", "we "])
+        self.assertAlmostEqual(transcribed_data[1].start, 1.6)
+        self.assertAlmostEqual(transcribed_data[1].end, 1.7)
+
+    def test_segment_ends_and_character_times(self):
+        chars = [{"char": char, "start": round(1 + i * 0.1, 1)} if char != " " else {"char": " "}
+                 for i, char in enumerate(" Hello, you")]
+        result_aligned = {"segments": [{
+            "words": [{"word": "Hello,", "start": 1.1, "end": 1.7}, {"word": "you", "start": 1.8, "end": 2.1}],
+            "chars": chars,
+        }]}
+
+        transcribed_data = convert_to_transcribed_data(result_aligned)
+
+        self.assertEqual([data.is_segment_end for data in transcribed_data], [False, True])
+        self.assertEqual(transcribed_data[0].char_starts, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6])
+        self.assertEqual(transcribed_data[1].char_starts, [1.8, 1.9, 2.0])
+
+    def test_character_times_that_do_not_fit_the_words_are_left_out(self):
+        segment = {"words": [{"word": "Hello"}], "chars": [{"char": char, "start": 1.0} for char in "Hallo"]}
+        self.assertIsNone(char_starts_per_word(segment))
+        self.assertIsNone(char_starts_per_word({"words": [{"word": "Hello"}]}))
 
     def test_number_to_words_converts(self):
         #Original, test with no language passed

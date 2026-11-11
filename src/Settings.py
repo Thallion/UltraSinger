@@ -20,13 +20,20 @@ class Settings:
     create_audio_chunks = False
     hyphenation = True
     use_separated_vocal = True
+    denoise = False  # Reduce noise in the vocal track before it is transcribed (made the charts slightly worse in measurements)
     create_karaoke = True
     ignore_audio = False
     input_file_is_ultrastar_txt = False # todo: to process_data
     keep_cache = False
     interactive_mode = False
     user_ffmpeg_path = ""
-    quantize_to_key = True  # Quantize notes to the detected key of the song
+    quantize_to_key = False  # Prefer the notes of the detected key of the song where the sung pitch lies between two notes
+    onset_correction = True  # Move note starts onto the onsets heard in the vocal track
+    octave_correction = True  # Move notes detected in the wrong octave back onto the melody
+
+    # Reference lyrics
+    lyrics_file = None  # Text file with the lyrics of the song; its words replace the transcribed ones
+    lyrics_lookup = True  # Look the lyrics up at lrclib.net when no lyrics file is given
 
     # Process data Paths
     input_file_path = ""

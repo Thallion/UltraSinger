@@ -54,12 +54,17 @@ This will help me a lot to keep this project alive and improve it.
     - [🗣 Transcriber](#-transcriber)
       - [Whisper](#whisper)
         - [Whisper languages](#whisper-languages)
+      - [📝 Reference Lyrics](#-reference-lyrics)
       - [✍️ Hyphenation](#️-hyphenation)
     - [👂 Pitcher](#-pitcher)
     - [👄 Separation](#-separation)
+    - [🎵 Key Quantization](#-key-quantization)
+    - [🎼 Note Clean-Up](#-note-clean-up)
     - [Sheet Music](#sheet-music)
     - [Format Version](#format-version)
     - [🏆 Ultrastar Score Calculation](#-ultrastar-score-calculation)
+    - [📊 Chart Benchmark](#-chart-benchmark)
+    - [🗂 Batch](#-batch)
     - [📟 Use GPU](#-use-gpu)
       - [Considerations for Windows users](#considerations-for-windows-users)
       - [Crashes due to low VRAM](#crashes-due-to-low-vram)
@@ -118,15 +123,20 @@ _Not all options working now!_
     --whisper_batch_size    Reduce if low on GPU mem >> ((default) is 16)
     --whisper_compute_type  Change to "int8" if low on GPU mem (may reduce accuracy) >> ((default) is "float16" for cuda devices, "int8" for cpu)
     --keep_numbers          Numbers will be transcribed as numerics instead of as words
+    --lyrics_file           Text file with the lyrics of the song. Its words replace the transcribed ones.
+    --disable_lyrics_lookup Do not look the lyrics up at lrclib.net. The lookup is enabled by default.
 
     [extra]
     --disable_hyphenation   Disable word hyphenation. Hyphenation is enabled by default.
     --disable_separation    Disable track separation. Track separation is enabled by default.
+    --denoise               Reduce noise in the separated vocals before they are transcribed. Disabled by default.
     --disable_karaoke       Disable creation of karaoke style txt file. Karaoke is enabled by default.
     --create_audio_chunks   Enable creation of audio chunks. Audio chunks are disabled by default.
     --keep_cache            Keep cache folder after creation. Cache folder is removed by default.
     --plot                  Enable creation of plots. Plots are disabled by default.
-    --quantize_to_key       Quantize notes to detected musical key. Removes pitch slides and out-of-key notes. >> ((default) is enabled)
+    --quantize_to_key       Prefer the notes of the detected musical key where the sung pitch lies between two notes. >> ((default) is disabled)
+    --disable_onset_correction   Do not move note starts onto the onsets heard in the vocal track.
+    --disable_octave_correction  Do not move notes detected in the wrong octave back onto the melody.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words
@@ -200,12 +210,35 @@ Example for romanian:
 -i XYZ --whisper_align_model "gigant/romanian-wav2vec2"
 ```
 
+For German, UltraSinger uses the alignment model `jonatasgrosman/wav2vec2-large-xlsr-53-german` instead of
+the default of WhisperX, which starts sung words about 0.1 s late.
+
+Without `--language`, the language is detected in the first 30 seconds of *singing* (not of the file, which
+often start with an instrumental intro), among the languages that have an alignment model.
+
+#### 📝 Reference Lyrics
+
+Whisper mishears words, even more so in songs. When the lyrics of the song are known, their words replace the
+transcribed ones before the words are timed, and the lines of the lyrics become the lines of the song.
+
+* `--lyrics_file "lyrics.txt"` uses the lyrics of a plain text file (one line per line of the song;
+  section labels like `[Chorus]` are ignored).
+* A file named `<input name> (Lyrics).txt` or `<input name>.lyrics.txt` next to the input file is used automatically.
+* Otherwise the lyrics are looked up at [lrclib.net](https://lrclib.net) by artist and title.
+  Disable with `--disable_lyrics_lookup`.
+
+Lyrics are only used when they fit what was transcribed (at least half of the words in common), so the lyrics
+of another song or version do no harm. Passages that the lyrics lack keep their transcribed words.
+
+```commandline
+-i "input/music.mp3" --lyrics_file "input/music lyrics.txt"
+```
+
 #### ✍️ Hyphenation
 
 Is on by default. Can also be deactivated if hyphenation does not produce
-anything useful. Note that the word is simply split,
-without paying attention to whether the separated word really
-starts at the place or is heard. To disable:
+anything useful. Each syllable starts where the forced alignment hears its first
+letter; when that is not known, the syllables share the time of the word evenly. To disable:
 
 ```commandline
 -i XYZ --disable_hyphenation
@@ -214,8 +247,7 @@ starts at the place or is heard. To disable:
 ### 👂 Pitcher
 
 Pitching is done with the `SwiftF0` model, which is faster and more accurate than CREPE.
-SwiftF0 automatically detects pitch frequencies between 46.875 Hz (G1) and 2093.75 Hz (C7).
-UltraSinger uses 60hz and 400hz
+SwiftF0 detects pitch frequencies between 46.875 Hz (G1) and 2093.75 Hz (C7).
 
 ### 👄 Separation
 
@@ -228,12 +260,35 @@ you have the option to disable this function; in which case the original audio f
 
 ### 🎵 Key Quantization
 
-By default, UltraSinger quantizes all detected notes to the detected musical key of the song. This helps to:
-* Remove pitch slides and vocal transitions between notes
-* Correct out-of-key notes from pitch detection errors
+A note takes the pitch that is sung for most of its time (the confidence weighted median of the pitch track,
+after taking out how far the recording is tuned off 440 Hz). By default this pitch is rounded to the nearest note.
 
-If you want to keep the raw pitch detection without quantization, set `quantize_to_key = False`.
-For most songs  quantization should produces better results.
+With `--quantize_to_key`, a pitch that lies between two notes goes to the one that belongs to the detected
+key of the song:
+
+```commandline
+-i XYZ --quantize_to_key
+```
+
+Moving *every* note into the detected key, as earlier versions did by default, made the charts worse:
+measured against hand-made charts, it cost about 7 points of pitch agreement
+(see [Chart Benchmark](#-chart-benchmark)).
+
+### 🎼 Note Clean-Up
+
+After the pitch detection the notes are cleaned up. All of this is on by default.
+
+* **Notes fitted to the singing**: a note ends where its singing ends, not at the start of the next word.
+* **Onset correction**: a note starts at the onset heard in the vocal track when one is near; the forced
+  alignment tends to start words a little late. Disable with `--disable_onset_correction`.
+* **Syllable timing**: the syllables of a word start where their first letter is sung (taken from the forced
+  alignment), instead of sharing the time of the word evenly. Syllables stay notes of their own, also on the same pitch.
+* **Unvoiced notes**: a note without a sung pitch (a consonant, a breath) takes the pitch of its neighbour instead of a random one.
+* **Octave correction**: single notes and short runs that the pitch detection put an octave too high or too low
+  are moved back onto the melody; longer passages that really are sung an octave apart stay.
+  Disable with `--disable_octave_correction`.
+* **Line breaks**: a line ends at a rest and at the end of a phrase, is split when it gets too long for the
+  screen, and a line of a word or two that would only flash by joins its neighbour.
 
 ### Sheet Music
 
@@ -269,6 +324,67 @@ for low male voices. Accurate is the real tone specified in the txt. I had txt f
 singable by humans, but you could still reach the 10k points in the game. The accuracy is important here, because from
 this MIDI and sheet are created. And you also want to have accurate files
 
+
+### 📊 Chart Benchmark
+
+`tools/chart_benchmark.py` measures how close the generated charts come to hand-made charts of the same songs.
+It answers "did this change make the charts better?" without anybody having to sing.
+
+It needs an UltraStar song library: one folder per song with a hand-made txt and its audio. The library is only
+read; everything the tool produces goes to a work folder outside this repository.
+
+```commandline
+# Convert the songs with the current code (the separated vocals, transcription and pitch are cached per song)
+python tools/chart_benchmark.py convert "path/to/songs" "path/to/workdir" --label baseline --limit 12
+
+# Measure the generated charts against the hand-made ones
+python tools/chart_benchmark.py evaluate "path/to/songs" "path/to/workdir" --label baseline -v
+
+# After a change: convert and evaluate under a new label, then compare
+python tools/chart_benchmark.py convert "path/to/songs" "path/to/workdir" --label new --args="--whisper large-v3"
+python tools/chart_benchmark.py evaluate "path/to/songs" "path/to/workdir" --label new
+python tools/chart_benchmark.py compare "path/to/workdir" baseline new
+```
+
+All pitches are compared without their octave, as the games do when they score. The main numbers:
+
+| Metric | Meaning |
+|---|---|
+| `chart_agreement_pct` | Share of the note time of the hand-made chart on which the generated chart has a note within one semitone. |
+| `chart_precision_pct` | Share of the generated note time that agrees with the hand-made chart. |
+| `chart_f1_pct` | Harmonic mean of the two: covers the reference without padding it. |
+| `pitch_agree_pct` | Where both charts have a note: pitch within one semitone. |
+| `onset_hit_100_pct` | Note starts of the hand-made chart with a generated note start within 0.1 s. |
+| `word_start_100_pct` | Words found in both charts that start within 0.1 s of each other. |
+| `lyrics_words_found_pct` | Words of the hand-made chart that the generated lyrics have, in order. |
+| `linebreak_f1_pct` | Line starts that both charts have within 0.5 s. |
+| `octave_jumps_per_100` | Jumps of 10 or more semitones between neighbouring notes per 100 notes. |
+
+Hand-made charts are not all well timed. The tool fits each of them to the sung pitch of the separated vocals
+(it tries time offsets up to one second) and leaves charts that fit badly (`--min-ref-fit`, default 50 %) out of the summary.
+
+Measured on 49 songs (German and English) with hand-made charts, mean over the songs:
+
+| Metric | Version 0.0.13.dev16 | This version |
+|---|---|---|
+| `chart_f1_pct` | 41.8 | 51.4 |
+| `pitch_agree_pct` | 66.2 | 76.7 |
+| `onset_hit_100_pct` | 62.8 | 70.4 |
+| `word_start_100_pct` | 45.3 | 61.7 |
+| `lyrics_words_found_pct` | 76.0 | 85.9 |
+| `linebreak_f1_pct` | 56.8 | 70.8 |
+| `octave_jumps_per_100` | 25.0 | 2.8 |
+
+### 🗂 Batch
+
+`ultrasinger_batch.sh` (Linux) converts all MP4 and MP3 files of a folder, one after the other, and puts the
+results into the same folder. Further UltraSinger options can follow the folder.
+
+```commandline
+./ultrasinger_batch.sh /path/to/folder --language de
+```
+
+A file `<name> (Lyrics).txt` next to `<name>.mp4` is used as [reference lyrics](#-reference-lyrics) of that song.
 
 ### 📟 Use GPU
 

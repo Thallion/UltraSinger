@@ -4,13 +4,26 @@ import soundfile as sf
 from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted
 
 
+FALLBACK_BPM = 120.0
+
+
 def get_bpm_from_data(data, sampling_rate):
     """Get real bpm from audio data"""
-    onset_env = librosa.onset.onset_strength(y=data, sr=sampling_rate)
-    wav_tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sampling_rate)
+    try:
+        onset_env = librosa.onset.onset_strength(y=data, sr=sampling_rate)
+        wav_tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sampling_rate)
+        bpm = float(wav_tempo[0])
+    except (ZeroDivisionError, ValueError, IndexError, librosa.ParameterError) as error:
+        # e.g. silence or a file too short to find a tempo in
+        print(f"{ULTRASINGER_HEAD} BPM detection failed ({error}); using {blue_highlighted(str(FALLBACK_BPM))}")
+        return FALLBACK_BPM
 
-    print(f"{ULTRASINGER_HEAD} BPM is {blue_highlighted(str(round(wav_tempo[0], 2)))}")
-    return wav_tempo[0]
+    if not bpm > 0 or bpm != bpm or bpm == float("inf"):
+        print(f"{ULTRASINGER_HEAD} No BPM found; using {blue_highlighted(str(FALLBACK_BPM))}")
+        return FALLBACK_BPM
+
+    print(f"{ULTRASINGER_HEAD} BPM is {blue_highlighted(str(round(bpm, 2)))}")
+    return bpm
 
 
 def get_bpm_from_file(wav_file: str) -> float:

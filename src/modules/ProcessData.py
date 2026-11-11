@@ -39,5 +39,7 @@ class ProcessData:
     pitched_data: Optional[PitchedData] = None
     midi_segments: Optional[List[MidiSegment]] = field(default_factory=list)
     parsed_file: Optional[UltrastarTxtValue] = None
+    has_lyric_lines: bool = False  # phrase_end_times are the line ends of reference lyrics
+    phrase_end_times: Optional[List[float]] = field(default_factory=list)  # Where phrases of the lyrics end (seconds)
 
 

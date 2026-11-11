@@ -41,20 +41,24 @@ def print_help() -> None:
     --whisper_batch_size    Reduce if low on GPU mem >> ((default) is 16)
     --whisper_compute_type  Change to "int8" if low on GPU mem (may reduce accuracy) >> ((default) is "float16" for cuda devices, "int8" for cpu)
     --keep_numbers          Numbers will be transcribed as numerics instead of as words >> True|False >> ((default) is False)
+    --lyrics_file           Text file with the lyrics of the song. Its words replace the transcribed ones and its lines become the lines of the song.
+                            A file named "<input name> (Lyrics).txt" next to the input file is used automatically.
+    --disable_lyrics_lookup Do not look the lyrics up at lrclib.net. The lookup is enabled by default.
     
     [pitcher]
-    # Default is crepe
-    --crepe            tiny|full >> ((default) is full)
-    --crepe_step_size  unit is miliseconds >> ((default) is 10)
+    # SwiftF0 is used; it has no options
     
     [extra]
     --disable_hyphenation   Disable word hyphenation. Hyphenation is enabled by default.
     --disable_separation    Disable track separation. Track separation is enabled by default.
+    --denoise               Reduce noise in the separated vocals before they are transcribed. Disabled by default.
     --disable_karaoke       Disable creation of karaoke style txt file. Karaoke is enabled by default.
     --create_audio_chunks   Enable creation of audio chunks. Audio chunks are disabled by default.
     --keep_cache            Keep cache folder after creation. Cache folder is removed by default.
     --plot                  Enable creation of plots. Plots are disabled by default.
-    --quantize_to_key       Quantize notes to the detected musical key. This removes slides and out-of-key notes.
+    --quantize_to_key       Prefer the notes of the detected musical key where the sung pitch lies between two notes. Disabled by default.
+    --disable_onset_correction   Do not move note starts onto the onsets heard in the vocal track.
+    --disable_octave_correction  Do not move notes detected in the wrong octave back onto the melody.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words

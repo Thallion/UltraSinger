@@ -1,3 +1,4 @@
+import shutil
 import os.path
 import re
 
@@ -80,7 +81,18 @@ def find_musescore_version_in_path(path) -> int:
         # MuseScore is not found or version is unknown
         return -1
 
+def find_musescore_on_path() -> str | None:
+    """MuseScore executable on the PATH (Linux and macOS installs)"""
+    for name in ('mscore', 'musescore', 'mscore4portable', 'mscore3', 'musescore3', 'MuseScore4', 'MuseScore3'):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
 def set_environment_variables(musescorePath=None) -> bool:
+    if(musescorePath is None):
+        musescorePath = find_musescore_on_path()
     if(musescorePath is None):
         version = find_musescore_version_in_path('C:\\Program Files')
         if(version == -1):

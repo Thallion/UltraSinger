@@ -2,6 +2,7 @@
 
 import copy
 import getopt
+import hashlib
 import os
 import sys
 import Levenshtein
@@ -25,6 +26,7 @@ from modules.Audio.youtube import (
     download_from_youtube,
 )
 from modules.Audio.bpm import get_bpm_from_file
+from modules.Audio.onset_correction import detect_vocal_onsets, snap_to_onsets
 
 from modules.console_colors import (
     ULTRASINGER_HEAD,
@@ -41,16 +43,25 @@ from modules.Midi.midi_creator import (
     create_midi_file,
 )
 from modules.Midi.MidiSegment import MidiSegment
+from modules.Midi.note_postprocessing import fill_unvoiced_notes, correct_octaves
 from modules.Midi.note_length_calculator import get_thirtytwo_note_second, get_sixteenth_note_second
 from modules.Pitcher.pitcher import (
     get_pitch_with_file,
 )
 from modules.Pitcher.pitched_data import PitchedData
+from modules.Pitcher.voicing import trim_to_voicing
 from modules.Speech_Recognition.TranscriptionResult import TranscriptionResult
 from modules.Speech_Recognition.hyphenation import (
     hyphenate_each_word,
 )
 from modules.Speech_Recognition.Whisper import transcribe_with_whisper
+from modules.Speech_Recognition.reference_lyrics import (
+    MIN_MATCH_RATIO,
+    MIN_MATCH_RATIO_GIVEN_LYRICS,
+    fetch_lyrics_from_lrclib,
+    find_lyrics_file,
+    read_lyrics_file,
+)
 from modules.Ultrastar import (
     ultrastar_writer,
 )
@@ -79,6 +90,41 @@ from modules.ffmpeg_helper import (
 from Settings import Settings
 
 settings = Settings()
+PHRASE_END_PUNCTUATION = (".", ",", "!", "?", ";", ":")
+
+
+def syllable_start_times(data: TranscribedData, syllables: list[str]) -> list[float]:
+    """Start time of each syllable of a word.
+
+    The forced alignment knows when each character of the word is sung. Where
+    it does not, the syllables share the time of the word by their length.
+    """
+    duration = data.end - data.start
+    count = len(syllables)
+    even = [data.start + duration * i / count for i in range(count)]
+
+    char_starts = data.char_starts
+    word = data.word.rstrip(" ")
+    if not char_starts or len(char_starts) != len(word) or "".join(syllables).rstrip(" ") != word:
+        return even
+
+    starts = [data.start]
+    offset = len(syllables[0])
+    for syllable in syllables[1:]:
+        start = next((t for t in char_starts[offset:offset + len(syllable)] if t is not None), None)
+        offset += len(syllable)
+        if start is None or not data.start < start < data.end:
+            return even
+        starts.append(start)
+
+    # Every syllable has to be long enough to be a note
+    min_duration = min(0.05, duration / count / 2)
+    for i in range(1, count):
+        if starts[i] - starts[i - 1] < min_duration:
+            return even
+    if data.end - starts[-1] < min_duration:
+        return even
+    return starts
 
 
 def add_hyphen_to_data(
@@ -91,24 +137,16 @@ def add_hyphen_to_data(
         if not hyphen_words[i]:
             new_data.append(data)
         else:
-            chunk_duration = data.end - data.start
-            chunk_duration = chunk_duration / (len(hyphen_words[i]))
-
-            next_start = data.start
-            for j in enumerate(hyphen_words[i]):
-                hyphenated_word_index = j[0]
+            syllables = hyphen_words[i]
+            starts = syllable_start_times(data, syllables) + [data.end]
+            for j, syllable in enumerate(syllables):
                 dup = copy.copy(data)
-                dup.start = next_start
-                next_start = data.end - chunk_duration * (
-                        len(hyphen_words[i]) - 1 - hyphenated_word_index
-                )
-                dup.end = next_start
-                dup.word = hyphen_words[i][hyphenated_word_index]
+                dup.char_starts = None
+                dup.start = starts[j]
+                dup.end = starts[j + 1]
+                dup.word = syllable
                 dup.is_hyphen = True
-                if hyphenated_word_index == len(hyphen_words[i]) - 1:
-                    dup.is_word_end = True
-                else:
-                    dup.is_word_end = False
+                dup.is_word_end = j == len(syllables) - 1
                 new_data.append(dup)
 
     return new_data
@@ -136,7 +174,10 @@ def correct_words(recognized_words, word_list_file):
 def remove_unecessary_punctuations(transcribed_data: list[TranscribedData]) -> None:
     """Remove unecessary punctuations from transcribed data"""
     punctuation = ".,"
-    for i, data in enumerate(transcribed_data):
+    for data in transcribed_data:
+        word = data.word.rstrip(" ")
+        if data.char_starts is not None and len(data.char_starts) == len(word):
+            data.char_starts = [t for char, t in zip(word, data.char_starts) if char not in punctuation]
         data.word = data.word.translate({ord(i): None for i in punctuation})
 
 
@@ -185,17 +226,21 @@ def run() -> tuple[str, Score, Score]:
     if not settings.ignore_audio:
         TranscribeAudio(process_data)
 
-    # Split syllables into segments
+    # Pitch audio
+    process_data.pitched_data = pitch_audio(process_data.process_data_paths)
+
+    # Fit the notes to the singing and split syllables into segments
     if not settings.ignore_audio:
+        process_data.transcribed_data = trim_to_voicing(process_data.transcribed_data, process_data.pitched_data)
+        if settings.onset_correction:
+            onsets = detect_vocal_onsets(process_data.process_data_paths.processing_audio_path)
+            process_data.transcribed_data = snap_to_onsets(process_data.transcribed_data, onsets)
         process_data.transcribed_data = split_syllables_into_segments(process_data.transcribed_data,
                                                                   process_data.media_info.bpm)
 
     # Create audio chunks
     if settings.create_audio_chunks:
         create_audio_chunks(process_data)
-
-    # Pitch audio
-    process_data.pitched_data = pitch_audio(process_data.process_data_paths)
 
     # Allowed keys for quantization
     allowed_notes_for_key = None
@@ -212,12 +257,22 @@ def run() -> tuple[str, Score, Score]:
     else:
         process_data.midi_segments = create_repitched_midi_segments_from_ultrastar_txt(process_data.pitched_data,
                                                                                        process_data.parsed_file)
+        process_data.midi_segments = fill_unvoiced_notes(process_data.midi_segments)
+        if settings.octave_correction:
+            process_data.midi_segments = correct_octaves(process_data.midi_segments)
+
+    if not process_data.midi_segments:
+        print(f"{ULTRASINGER_HEAD} {red_highlighted('Error: No singing was found in the audio, so there are no notes to write.')}")
+        sys.exit(1)
 
     # Merge syllable segments
     if not settings.ignore_audio:
+        process_data.midi_segments = fill_unvoiced_notes(process_data.midi_segments)
         process_data.midi_segments, process_data.transcribed_data = merge_syllable_segments(process_data.midi_segments,
                                                                                         process_data.transcribed_data,
                                                                                         process_data.media_info.bpm)
+        if settings.octave_correction:
+            process_data.midi_segments = correct_octaves(process_data.midi_segments)
 
     # Create plot
     if settings.create_plot:
@@ -321,10 +376,10 @@ def merge_syllable_segments(midi_segments: list[MidiSegment],
                             real_bpm: float) -> tuple[list[MidiSegment], list[TranscribedData]]:
     """Merge sub-segments of a syllable where the pitch is the same
 
-    This function handles three cases:
+    This function handles two cases:
     1. Merge consecutive ~ segments with the SAME pitch (same note held)
     2. Detect and merge SLIDES: short ~ segments with ±1-2 semitone jumps between syllables
-    3. Merge ANY consecutive segments (including regular syllables) with the SAME pitch into one word
+    Different syllables stay notes of their own, also on the same pitch: each one is sung anew.
     """
 
     sixteenth_note = get_sixteenth_note_second(real_bpm)
@@ -367,16 +422,6 @@ def merge_syllable_segments(midi_segments: list[MidiSegment],
                 # Ignore slide detection on error
                 pass
 
-        # Check if current segment should be merged with previous due to same pitch
-        should_merge_same_pitch = False
-        if (i > 0 and
-            previous_data is not None and
-            not is_tilde_segment and  # Not a ~ segment
-            is_same_note and
-            not has_breath_pause and
-            not previous_data.is_word_end):  # Don't merge across word boundaries
-            should_merge_same_pitch = True
-
         should_merge_tilde = (is_tilde_segment and
                              previous_data is not None and
                              (is_same_note or is_potential_slide) and
@@ -398,40 +443,6 @@ def merge_syllable_segments(midi_segments: list[MidiSegment],
                 if not new_midi_notes[-1].word.endswith(" "):
                     new_midi_notes[-1].word += " "
                 new_data[-1].is_word_end = True
-
-        elif should_merge_same_pitch:
-            # Merge regular syllable with previous syllable (same pitch)
-            new_data[-1].end = data.end
-            new_midi_notes[-1].end = data.end
-
-            # Check if current word has space at end before stripping
-            has_space = str(data.word).endswith(" ")
-
-            # Concatenate the words (remove trailing space from previous, add current word)
-            prev_word = new_data[-1].word.rstrip()
-            curr_word = data.word.rstrip()
-
-            # Remove ~ from BOTH previous and current word if present
-            if prev_word == "~":
-                prev_word = ""
-            if curr_word.startswith("~"):
-                curr_word = curr_word[1:]
-
-            # Concatenate
-            new_data[-1].word = prev_word + curr_word
-            new_midi_notes[-1].word = prev_word + curr_word
-
-            # Preserve space at end if current segment had it
-            if has_space:
-                new_data[-1].word += " "
-                new_midi_notes[-1].word += " "
-
-            if data.is_word_end:
-                new_data[-1].is_word_end = True
-                new_data[-1].is_hyphen = False
-            else:
-                # Keep hyphen status if either segment was hyphenated
-                new_data[-1].is_hyphen = new_data[-1].is_hyphen or data.is_hyphen
 
         else:
             # Add as new segment
@@ -496,14 +507,45 @@ def InitProcessData():
     return process_data
 
 
+def load_reference_lyrics(process_data) -> tuple[list, float]:
+    """Lyrics the song may have: of the given file, of a file next to the input, or looked up online.
+
+    Returns the lyrics and the share of their words they have to share with the transcription to be used.
+    """
+    lyrics_file = settings.lyrics_file or find_lyrics_file(settings.input_file_path)
+    if lyrics_file:
+        if not check_file_exists(lyrics_file):
+            print(f"{ULTRASINGER_HEAD} {red_highlighted('Error: Lyrics file not found:')} {lyrics_file}")
+            sys.exit(1)
+        print(f"{ULTRASINGER_HEAD} Reading lyrics from {blue_highlighted(lyrics_file)}")
+        return [read_lyrics_file(lyrics_file)], MIN_MATCH_RATIO_GIVEN_LYRICS
+    if settings.lyrics_lookup and process_data.media_info is not None:
+        candidates = fetch_lyrics_from_lrclib(process_data.media_info.artist, process_data.media_info.title)
+        if candidates:
+            print(f"{ULTRASINGER_HEAD} Found lyrics at {blue_highlighted('lrclib.net')}")
+        return candidates, MIN_MATCH_RATIO
+    return [], MIN_MATCH_RATIO
+
+
 def TranscribeAudio(process_data):
+    reference_lyrics, lyrics_min_match_ratio = load_reference_lyrics(process_data)
     transcription_result = transcribe_audio(process_data.process_data_paths.cache_folder_path,
-                                            process_data.process_data_paths.processing_audio_path)
+                                            process_data.process_data_paths.processing_audio_path,
+                                            reference_lyrics, lyrics_min_match_ratio)
 
     if process_data.media_info.language is None:
         process_data.media_info.language = transcription_result.detected_language
 
     process_data.transcribed_data = transcription_result.transcribed_data
+
+    # Phrases end with the lines of the reference lyrics, else where the
+    # transcription ends a sentence or sets a punctuation mark
+    process_data.has_lyric_lines = transcription_result.has_lyric_lines
+    process_data.phrase_end_times = [
+        data.end for data in process_data.transcribed_data
+        if data.is_segment_end or (not transcription_result.has_lyric_lines
+                                   and data.word.rstrip(" ").endswith(PHRASE_END_PUNCTUATION))
+    ]
 
     # Hyphen
     # Todo: Is it really unnecessary?
@@ -542,7 +584,9 @@ def CreateUltraStarTxt(process_data: ProcessData):
             process_data.media_info,
             settings.format_version,
             settings.create_karaoke,
-            settings.APP_VERSION
+            settings.APP_VERSION,
+            process_data.phrase_end_times,
+            process_data.has_lyric_lines
         )
     else:
         ultrastar_file_output = create_ultrastar_txt_from_midi_segments(
@@ -558,7 +602,8 @@ def CreateUltraStarTxt(process_data: ProcessData):
 
     # Add calculated score to Ultrastar txt
     #Todo: Missing Karaoke
-    ultrastar_writer.add_score_to_ultrastar_txt(ultrastar_file_output, simple_score)
+    if simple_score is not None:
+        ultrastar_writer.add_score_to_ultrastar_txt(ultrastar_file_output, simple_score)
     return accurate_score, simple_score, ultrastar_file_output
 
 
@@ -589,10 +634,13 @@ def CreateProcessAudio(process_data) -> str:
         input_path = process_data.process_data_paths.audio_output_file_path
 
     # Denoise vocal audio
-    denoised_output_path = os.path.join(
-        process_data.process_data_paths.cache_folder_path, process_data.basename + "_denoised.wav"
-    )
-    denoise_vocal_audio(input_path, denoised_output_path, settings.skip_cache_denoise_vocal_audio)
+    if settings.denoise:
+        denoised_output_path = os.path.join(
+            process_data.process_data_paths.cache_folder_path, process_data.basename + "_denoised.wav"
+        )
+        denoise_vocal_audio(input_path, denoised_output_path, settings.skip_cache_denoise_vocal_audio)
+    else:
+        denoised_output_path = input_path
 
     # Convert to mono audio
     mono_output_path = os.path.join(
@@ -610,7 +658,9 @@ def CreateProcessAudio(process_data) -> str:
     return mute_output_path
 
 
-def transcribe_audio(cache_folder_path: str, processing_audio_path: str) -> TranscriptionResult:
+def transcribe_audio(cache_folder_path: str, processing_audio_path: str,
+                     reference_lyrics: list = None,
+                     lyrics_min_match_ratio: float = MIN_MATCH_RATIO) -> TranscriptionResult:
     """Transcribe audio with AI"""
     transcription_result = None
     whisper_align_model_string = None
@@ -619,6 +669,11 @@ def transcribe_audio(cache_folder_path: str, processing_audio_path: str) -> Tran
             whisper_align_model_string = settings.whisper_align_model.replace("/", "_")
         whisper_device = "cpu" if settings.force_whisper_cpu else settings.pytorch_device
         transcription_config = f"{settings.transcriber}_{settings.whisper_model.value}_{whisper_device}_{whisper_align_model_string}_{settings.whisper_batch_size}_{settings.whisper_compute_type}_{settings.language}"
+        if reference_lyrics:
+            lyrics_text = "//".join(" ".join(word.text + ("/" if word.line_end else "") for word in lyrics)
+                                    for lyrics in reference_lyrics)
+            lyrics_text += f"//{lyrics_min_match_ratio}"
+            transcription_config += "_lyrics" + hashlib.md5(lyrics_text.encode("utf-8")).hexdigest()[:8]
         transcription_path = os.path.join(cache_folder_path, f"{transcription_config}.json")
         cached_transcription_available = check_file_exists(transcription_path)
         if settings.skip_cache_transcription or not cached_transcription_available:
@@ -631,6 +686,8 @@ def transcribe_audio(cache_folder_path: str, processing_audio_path: str) -> Tran
                 settings.whisper_compute_type,
                 settings.language,
                 settings.keep_numbers,
+                reference_lyrics,
+                lyrics_min_match_ratio,
             )
             with open(transcription_path, "w", encoding=FILE_ENCODING) as file:
                 file.write(transcription_result.to_json())
@@ -852,9 +909,19 @@ def init_settings(argv: list[str]) -> Settings:
         elif opt in ("--interactive"):
             settings.interactive_mode = True
         elif opt in ("--quantize_to_key"):
-            settings.quantize_to_key = arg
+            settings.quantize_to_key = True
         elif opt in ("--ffmpeg"):
             settings.user_ffmpeg_path = arg
+        elif opt in ("--denoise"):
+            settings.denoise = True
+        elif opt in ("--lyrics_file"):
+            settings.lyrics_file = arg
+        elif opt in ("--disable_lyrics_lookup"):
+            settings.lyrics_lookup = False
+        elif opt in ("--disable_onset_correction"):
+            settings.onset_correction = False
+        elif opt in ("--disable_octave_correction"):
+            settings.octave_correction = False
     if settings.output_folder_path == "":
         if settings.input_file_path.startswith("https:"):
             dirname = os.getcwd()
@@ -896,7 +963,12 @@ def arg_options():
         "quantize_to_key",
         "interactive",
         "cookiefile=",
-        "ffmpeg="
+        "ffmpeg=",
+        "lyrics_file=",
+        "denoise",
+        "disable_lyrics_lookup",
+        "disable_onset_correction",
+        "disable_octave_correction",
     ]
     return long, short
 

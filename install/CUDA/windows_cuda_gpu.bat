@@ -87,7 +87,7 @@ echo Installing PyTorch with CUDA support (as recommended by WhisperX)...
 uv pip uninstall torch torchvision torchaudio -y 2>nul
 :: Install PyTorch 2.8.0 with CUDA for WhisperX compatibility
 :: This version includes cuDNN 9.x which is compatible with the latest PyTorch
-uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --force-reinstall
+uv pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128 --reinstall-package torch --reinstall-package torchvision --reinstall-package torchaudio
 if !errorlevel! neq 0 (
     echo Error during PyTorch installation
     pause

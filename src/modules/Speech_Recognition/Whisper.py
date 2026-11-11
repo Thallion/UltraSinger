@@ -1,4 +1,5 @@
 """Whisper Speech Recognition Module"""
+import gc
 import os
 import inspect
 import textwrap
@@ -28,6 +29,7 @@ from torch.cuda import OutOfMemoryError
 from modules.Speech_Recognition.TranscriptionResult import TranscriptionResult
 from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted, red_highlighted
 from modules.Speech_Recognition.TranscribedData import TranscribedData, from_whisper
+from modules.Speech_Recognition.reference_lyrics import choose_lyrics, correct_segments, MIN_MATCH_RATIO
 
 #Addition for numbers to words
 import re
@@ -36,6 +38,61 @@ from num2words import num2words
 
 #Addition for numbers to words
 re_split_preserve_space = re.compile(r'(\d+|\W+|\w+)')
+
+
+# Alignment models that time sung words better than the defaults of whisperx.
+# Measured against hand-made charts: the default German model starts every
+# word about 0.1 s late (44 % of the word starts within 0.1 s of the chart,
+# 82 % with this one). The default English model is the better one for English.
+ALIGN_MODELS = {
+    "de": "jonatasgrosman/wav2vec2-large-xlsr-53-german",
+}
+
+SAMPLE_RATE = 16000
+LANGUAGE_DETECTION_SECONDS = 30
+
+
+def languages_with_align_model() -> set[str]:
+    """Languages whisperx can align without a model given by the user"""
+    from whisperx.alignment import DEFAULT_ALIGN_MODELS_HF, DEFAULT_ALIGN_MODELS_TORCH
+    return set(DEFAULT_ALIGN_MODELS_TORCH) | set(DEFAULT_ALIGN_MODELS_HF) | set(ALIGN_MODELS)
+
+
+def detect_language(whisper_model, audio, allowed_languages: set[str] | None) -> str | None:
+    """Language of the first 30 s of singing, among ``allowed_languages`` when given.
+
+    whisperx listens to the first 30 s of the file. Before the singing starts
+    that is silence, for which whisper names any language (Latin for a song
+    in English), and then no alignment model exists for it.
+    """
+    try:
+        from whisperx.audio import log_mel_spectrogram, N_SAMPLES
+
+        sung = (abs(audio) > 0.01).nonzero()[0]
+        start = int(sung[0]) if len(sung) else 0
+        start = max(0, min(start, len(audio) - N_SAMPLES))
+        window = audio[start:start + N_SAMPLES]
+        n_mels = whisper_model.model.feat_kwargs.get("feature_size") or 80
+        segment = log_mel_spectrogram(window, n_mels=n_mels,
+                                      padding=0 if len(window) >= N_SAMPLES else N_SAMPLES - len(window))
+        encoder_output = whisper_model.model.encode(segment)
+        results = whisper_model.model.model.detect_language(encoder_output)
+        for language_token, probability in results[0]:
+            language = language_token[2:-2]
+            if allowed_languages is None or language in allowed_languages:
+                print(f"{ULTRASINGER_HEAD} Detected language {blue_highlighted(language)} "
+                      f"({probability:.0%}) in the first {LANGUAGE_DETECTION_SECONDS} s of singing")
+                return language
+    except Exception as exception:  # pylint: disable=broad-except
+        print(f"{ULTRASINGER_HEAD} {red_highlighted('Language detection failed:')} {exception}")
+    return None
+
+
+def free_gpu_memory() -> None:
+    """Give the memory of deleted models back, so the next model (or song) fits on the GPU"""
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 MEMORY_ERROR_MESSAGE = f"{ULTRASINGER_HEAD} {blue_highlighted('whisper')} ran out of GPU memory; reduce --whisper_batch_size or force usage of cpu with --force_cpu"
@@ -97,8 +154,14 @@ def transcribe_with_whisper(
     compute_type: str = None,
     language: str = None,
     keep_numbers: bool = False,
+    reference_lyrics: list = None,
+    lyrics_min_match_ratio: float = MIN_MATCH_RATIO,
 ) -> TranscriptionResult:
-    """Transcribe with whisper"""
+    """Transcribe with whisper
+
+    reference_lyrics: lyrics the song may have (each a list of LyricWord); the words of
+    those that fit the transcription best replace the transcribed ones
+    """
     # Info: Regardless of the audio sampling rate used in the original audio file, whisper resample the audio signal to 16kHz (via ffmpeg). So the standard input from (44.1 or 48 kHz) should work.
     print(
         f"{ULTRASINGER_HEAD} Loading {blue_highlighted('whisper')} with model {blue_highlighted(model.value)} and {red_highlighted(device)} as worker"
@@ -121,15 +184,37 @@ def transcribe_with_whisper(
 
         print(f"{ULTRASINGER_HEAD} Transcribing {audio_path}")
 
-        result = loaded_whisper_model.transcribe(
-            audio, batch_size=batch_size, language=language
-        )
+        if language is None:
+            language = detect_language(
+                loaded_whisper_model, audio,
+                None if alignment_model is not None else languages_with_align_model())
+
+        # Songs with much text need more GPU memory: try again with half the batch size
+        while True:
+            try:
+                result = loaded_whisper_model.transcribe(
+                    audio, batch_size=batch_size, language=language
+                )
+                break
+            except (RuntimeError, OutOfMemoryError) as error:
+                if "out of memory" not in str(error).lower() or batch_size <= 1:
+                    raise
+                batch_size = max(1, batch_size // 2)
+                free_gpu_memory()
+                print(f"{ULTRASINGER_HEAD} {blue_highlighted('whisper')} ran out of GPU memory; "
+                      f"trying again with batch size {blue_highlighted(str(batch_size))}")
 
         detected_language = result["language"]
         if language is None:
             language = detected_language
 
+        # The alignment model needs the memory of the whisper model
+        del loaded_whisper_model
+        free_gpu_memory()
+
         # load alignment model and metadata
+        if alignment_model is None:
+            alignment_model = ALIGN_MODELS.get(language)
         try:
             model_a, metadata = whisperx.load_align_model(
                 language_code=language, device=device, model_name=alignment_model
@@ -143,6 +228,14 @@ def transcribe_with_whisper(
             )
             raise ve
 
+        # The words of known lyrics replace the transcribed ones before they are timed
+        line_ends = None
+        lyrics = choose_lyrics(result["segments"], reference_lyrics or [], lyrics_min_match_ratio)
+        if lyrics is not None:
+            corrected = correct_segments(result["segments"], lyrics)
+            if corrected is not None:
+                result["segments"], line_ends = corrected
+
         #Addition for numbers to words (Using previous code from louispan in PR#135)
         if keep_numbers == False: 
             for obj in result["segments"]:
@@ -155,12 +248,21 @@ def transcribe_with_whisper(
             metadata,
             audio,
             device,
-            return_char_alignments=False,
+            return_char_alignments=True,
         )
+
+        del model_a
+        free_gpu_memory()
 
         transcribed_data = convert_to_transcribed_data(result_aligned)
 
-        return TranscriptionResult(transcribed_data, detected_language)
+        # With reference lyrics, the phrases end where the lines of the lyrics end
+        has_lyric_lines = line_ends is not None and len(line_ends) == len(transcribed_data)
+        if has_lyric_lines:
+            for data, line_end in zip(transcribed_data, line_ends):
+                data.is_segment_end = line_end
+
+        return TranscriptionResult(transcribed_data, detected_language, has_lyric_lines)
     except ValueError as value_error:
         # Restore original torch.load in case of error
         torch.load = _original_torch_load
@@ -194,15 +296,48 @@ def transcribe_with_whisper(
         # Restore original torch.load after models are loaded
         # This ensures other modules (like pitch detection) are not affected by the monkey-patch
         torch.load = _original_torch_load
+        free_gpu_memory()
+
+
+def char_starts_per_word(segment: dict) -> list[list[float | None]] | None:
+    """Start time of every character, grouped by the words of an aligned segment.
+
+    None when the characters do not add up to the words of the segment.
+    """
+    chars = segment.get("chars")
+    if not chars:
+        return None
+
+    groups = []
+    current_text = ""
+    current_starts = []
+    for char in chars + [{"char": " "}]:
+        if char["char"] == " ":
+            if current_text:
+                groups.append((current_text, current_starts))
+            current_text = ""
+            current_starts = []
+        else:
+            current_text += char["char"]
+            current_starts.append(char.get("start"))
+
+    words = segment["words"]
+    if len(groups) != len(words) or any(text != word["word"] for (text, _), word in zip(groups, words)):
+        return None
+    return [starts for _, starts in groups]
 
 
 def convert_to_transcribed_data(result_aligned):
     transcribed_data = []
     for segment in result_aligned["segments"]:
-        for obj in segment["words"]:
+        char_starts = char_starts_per_word(segment)
+        for word_index, obj in enumerate(segment["words"]):
             vtd = from_whisper(obj)  # create custom Word object
+            if char_starts is not None:
+                vtd.char_starts = char_starts[word_index]
+            vtd.is_segment_end = word_index == len(segment["words"]) - 1
             vtd.word = vtd.word + " "  # add space to end of word
-            if len(obj) < 4:
+            if "start" not in obj or "end" not in obj:
                 #Addition for numbers to words (Using previous code from louispan in PR#135)
                 if len(transcribed_data) == 0: # if the first word doesn't have any timing data
                     vtd.start = 0.0

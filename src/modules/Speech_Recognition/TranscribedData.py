@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from dataclasses_json import dataclass_json
 
@@ -14,6 +15,9 @@ class TranscribedData:
     end: float = 0
     is_hyphen: bool = False
     is_word_end: bool = True
+    is_segment_end: bool = False  # Last word of a segment (sentence) of the transcription
+    # Start time of each character of the word from the forced alignment (None where unknown)
+    char_starts: Optional[list[Optional[float]]] = None
 
 
 def from_whisper(whisper_dict) -> TranscribedData:

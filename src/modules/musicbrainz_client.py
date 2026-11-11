@@ -52,6 +52,7 @@ def search_musicbrainz(title: str, artist) -> SongInfo:
     # remove from search_string "official video"
     # todo: do we need filter?
     origin_title = title
+    origin_artist = artist
     for filter in title_filter:
         title = title.lower().replace(filter.lower(), "").strip()
         if artist is not None:
@@ -63,8 +64,8 @@ def search_musicbrainz(title: str, artist) -> SongInfo:
         recording = __multi_line_search(artist, title)
 
     if recording is None:
-        print(f"{ULTRASINGER_HEAD} {red_highlighted('No match found')}")
-        return SongInfo(title=origin_title, artist="Unknown Artist")
+        print(f"{ULTRASINGER_HEAD} {red_highlighted('No match found')} - keeping the given artist and title")
+        return SongInfo(title=origin_title, artist=origin_artist or "Unknown Artist")
 
     artist = recording['artist-credit-phrase']
     title = recording['title']

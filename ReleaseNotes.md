@@ -1,3 +1,23 @@
+# Version: next
+- Changes:
+  - Reference lyrics: `--lyrics_file`, a `<name> (Lyrics).txt` next to the input, or a lookup at lrclib.net (`--disable_lyrics_lookup`). The words of the lyrics replace the transcribed ones before they are timed
+  - Better alignment model for German (the default one starts sung words about 0.1 s late)
+  - Language detection in the first 30 s of singing, among the languages that can be aligned (no more "No default align-model for language: la")
+  - Note pitch from the confidence weighted median of the pitch track, tuning offset of the recording taken out
+  - Octave correction: single notes and short runs in the wrong octave are moved back onto the melody (`--disable_octave_correction`)
+  - Notes without a sung pitch take the pitch of their neighbour
+  - Notes end where their singing ends; note starts move onto the onsets of the vocal track (`--disable_onset_correction`)
+  - Syllables start where the forced alignment hears their first letter, and stay notes of their own on the same pitch
+  - Line breaks at rests and phrase ends, long lines are split, lines that flash by are joined
+  - Key quantization is off by default and only prefers the notes of the key (`--quantize_to_key`); moving every note into the key made the charts worse
+  - GPU memory of the models is given back after use (several songs in one process, 8 GB cards); the transcription is tried again with half the batch size when the memory runs out
+  - Denoising of the vocals is off by default (`--denoise`)
+  - Notes never get a length of 0 beats; no crash without score calculation or without any singing
+  - CUDA install scripts keep the locked versions of the other packages (NumPy)
+  - BPM fallback when no tempo is found, MuseScore is found on the PATH, tag values with a colon are read completely, artist and title of the input are kept when MusicBrainz finds nothing
+  - `tools/chart_benchmark.py` measures generated charts against hand-made ones
+  - `ultrasinger_batch.sh` converts a folder
+
 # Version: 0.0.13dev16
 Date: 2026.03.04
 - Changes:

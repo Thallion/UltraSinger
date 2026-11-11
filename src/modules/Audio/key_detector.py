@@ -94,54 +94,17 @@ def quantize_note_to_key(note: str, allowed_notes: set[str]) -> str:
     Returns:
         Quantized note name
     """
-    # Parse note and octave
-    if len(note) == 0:
-        return note
-
-    # Extract note name and octave
-    if len(note) >= 2 and note[-2] == '#':
-        note_name = note[:-1]
-        octave = note[-1]
-    else:
-        note_name = note[:-1] if note[-1].isdigit() else note
-        octave = note[-1] if note[-1].isdigit() else ''
-
-    # If already in key, return as is
-    if note_name in allowed_notes:
-        return note
-
-    # Find nearest allowed note
     try:
-        note_midi = librosa.note_to_midi(note)
-    except:
+        note_midi = int(librosa.note_to_midi(note))
+    except (librosa.ParameterError, ValueError, TypeError):
         return note
 
-    # Try all allowed notes in nearby octaves
-    min_distance = float('inf')
-    best_note = note
+    if NOTE_NAMES[note_midi % 12] in allowed_notes:
+        return note
 
-    for allowed_note_name in allowed_notes:
-        # Try same octave and adjacent octaves
-        for oct_offset in [-1, 0, 1]:
-            if not octave:
-                test_octave = 4 + oct_offset
-            else:
-                test_octave = int(octave) + oct_offset
-
-            if test_octave < 0 or test_octave > 8:
-                continue
-
-            test_note = f"{allowed_note_name}{test_octave}"
-
-            try:
-                test_midi = librosa.note_to_midi(test_note)
-                distance = abs(test_midi - note_midi)
-
-                if distance < min_distance:
-                    min_distance = distance
-                    best_note = test_note
-            except:
-                continue
-
-    #print(f"{ULTRASINGER_HEAD} Moved {blue_highlighted(note)} to {blue_highlighted(best_note)}")
-    return best_note
+    # Nearest note of the key; of two equally near ones the lower (always the same one)
+    for distance in (1, 2):
+        for candidate in (note_midi - distance, note_midi + distance):
+            if NOTE_NAMES[candidate % 12] in allowed_notes:
+                return librosa.midi_to_note(candidate, unicode=False)
+    return note

@@ -114,7 +114,8 @@ def create_ultrastar_txt(
             # 'n2'  duration at real beat
             # 'n3'  pitch where 0 == C4
             # 'w'   lyric
-            line = f"{UltrastarTxtNoteTypeTag.NORMAL.value} " \
+            note_type = UltrastarTxtNoteTypeTag.RAP if midi_segment.rap else UltrastarTxtNoteTypeTag.NORMAL
+            line = f"{note_type.value} " \
                    f"{str(start_beat)} " \
                    f"{str(duration)} " \
                    f"{str(convert_midi_note_to_ultrastar_note(midi_segment))} " \

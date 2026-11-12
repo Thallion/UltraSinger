@@ -30,6 +30,7 @@ class Settings:
     quantize_to_key = False  # Prefer the notes of the detected key of the song where the sung pitch lies between two notes
     onset_correction = True  # Move note starts onto the onsets heard in the vocal track
     octave_correction = True  # Move notes detected in the wrong octave back onto the melody
+    rap_detection = True  # Write rapped lines as rap notes, which are scored without their pitch
 
     # Reference lyrics
     lyrics_file = None  # Text file with the lyrics of the song; its words replace the transcribed ones

@@ -6,6 +6,9 @@ Usage:
     python tools/chart_benchmark.py evaluate SONGS_DIR WORK_DIR --label NAME
     python tools/chart_benchmark.py compare  WORK_DIR LABEL_A LABEL_B
 
+convert and evaluate take --source usdb|own to use only the songs that USDB Syncer
+downloaded (their folder has a .usdb file) or only the other ones.
+
 SONGS_DIR is an UltraStar song library (one folder per song with a hand-made
 txt and its audio). It is only read. Everything that is produced goes to
 WORK_DIR, which must lie outside this repository.
@@ -140,7 +143,9 @@ def find_songs(songs_dir: str) -> list[dict]:
         folder = os.path.join(songs_dir, name)
         if not os.path.isdir(folder):
             continue
-        txts = [f for f in os.listdir(folder) if f.lower().endswith(".txt")]
+        files = os.listdir(folder)
+        txts = [f for f in files if f.lower().endswith(".txt")]
+        source = "usdb" if any(f.lower().endswith(".usdb") for f in files) else "own"
         for txt in txts:
             try:
                 chart = parse_chart(os.path.join(folder, txt))
@@ -152,13 +157,16 @@ def find_songs(songs_dir: str) -> list[dict]:
             audio_path = os.path.join(folder, audio.strip())
             if not audio or not os.path.isfile(audio_path) or not audio_path.lower().endswith(AUDIO_EXTENSIONS):
                 continue
-            songs.append({"name": name, "txt": chart.path, "audio": audio_path,
+            songs.append({"name": name, "txt": chart.path, "audio": audio_path, "source": source,
                           "artist": chart.tags.get("ARTIST", ""), "title": chart.tags.get("TITLE", name)})
             break
     return songs
 
 
-def select_songs(songs: list[dict], name_filter: str | None, limit: int | None) -> list[dict]:
+def select_songs(songs: list[dict], name_filter: str | None, limit: int | None,
+                 source: str = "all") -> list[dict]:
+    if source != "all":
+        songs = [s for s in songs if s["source"] == source]
     if name_filter:
         wanted = [f.strip().lower() for f in name_filter.split(",") if f.strip()]
         songs = [s for s in songs if any(w in s["name"].lower() for w in wanted)]
@@ -182,7 +190,7 @@ def check_work_dir(work_dir: str) -> str:
 
 def convert(args) -> None:
     work_dir = check_work_dir(args.work_dir)
-    songs = select_songs(find_songs(args.songs_dir), args.filter, args.limit)
+    songs = select_songs(find_songs(args.songs_dir), args.filter, args.limit, args.source)
     print(f"Converting {len(songs)} songs as '{args.label}'")
 
     sys.path.insert(0, SRC_DIR)
@@ -411,6 +419,19 @@ def evaluate_song(ref: Chart, gen: Chart, cache_dir: str) -> dict:
     break_f1 = (2 * break_recall * break_precision / (break_recall + break_precision)
                 if break_recall + break_precision else 0.0)
 
+    # Rap: note time without a pitch to sing (rap and freestyle notes in hand-made charts).
+    # Only time on which both charts have a note is compared: rap notes are short and leave gaps.
+    ref_rap = note_frames([n for n in ref.notes if n.kind in "RGF"], frame_count, offset)
+    gen_rap = note_frames([n for n in gen.notes if n.kind in "RGF"], frame_count)
+    gen_any = note_frames(gen.notes, frame_count)
+    ref_note_time = sum(1 for f in ref_any if f >= 0)
+    gen_note_time = sum(1 for f in gen_any if f >= 0)
+    ref_rap_time = sum(1 for f in ref_rap if f >= 0)
+    gen_rap_time = sum(1 for f in gen_rap if f >= 0)
+    ref_rap_shared = sum(1 for r, g in zip(ref_rap, gen_any) if r >= 0 and g >= 0)
+    gen_rap_shared = sum(1 for a, g in zip(ref_any, gen_rap) if a >= 0 and g >= 0)
+    rap_both = sum(1 for r, g in zip(ref_rap, gen_rap) if r >= 0 and g >= 0)
+
     gen_lengths = [n.end - n.start for n in gen_pitched]
     return {
         "ref_offset_ms": round(offset * 1000),
@@ -435,6 +456,10 @@ def evaluate_song(ref: Chart, gen: Chart, cache_dir: str) -> dict:
         "lyrics_precision_pct": 100 * found / len(gen_words) if gen_words else 0.0,
         "word_start_100_pct": 100 * start_100 / found if found else 0.0,
         "word_start_250_pct": 100 * start_250 / found if found else 0.0,
+        "ref_rap_pct": 100 * ref_rap_time / ref_note_time if ref_note_time else 0.0,
+        "rap_pct": 100 * gen_rap_time / gen_note_time if gen_note_time else 0.0,
+        "rap_found_pct": 100 * rap_both / ref_rap_shared if ref_rap_shared else None,
+        "rap_precision_pct": 100 * rap_both / gen_rap_shared if gen_rap_shared else None,
     }
 
 
@@ -448,7 +473,7 @@ SUMMARY_METRICS = [
 
 def evaluate(args) -> None:
     work_dir = check_work_dir(args.work_dir)
-    songs = find_songs(args.songs_dir)
+    songs = select_songs(find_songs(args.songs_dir), None, None, args.source)
     rows = {}
     for song in songs:
         gen_path = os.path.join(work_dir, "runs", args.label, song["name"], "chart.txt")
@@ -459,6 +484,7 @@ def evaluate(args) -> None:
             continue
         row = evaluate_song(ref, gen, os.path.join(work_dir, "cache", song["name"]))
         row["reliable"] = row["ref_fit_pct"] is None or row["ref_fit_pct"] >= args.min_ref_fit
+        row["source"] = song["source"]
         rows[song["name"]] = row
 
     reliable = [r for r in rows.values() if r["reliable"]]
@@ -477,11 +503,18 @@ def evaluate(args) -> None:
             print(f"{flag} {name[:42]:42} f1 {row['chart_f1_pct']:5.1f} agr {row['chart_agreement_pct']:5.1f} "
                   f"prec {row['chart_precision_pct']:5.1f} on100 {row['onset_hit_100_pct']:5.1f} "
                   f"words {row['lyrics_words_found_pct']:5.1f} n {row['note_count_ratio']:4.2f} "
-                  f"fit {row['ref_fit_pct'] or 0:5.1f} off {row['ref_offset_ms']:5d}")
+                  f"fit {row['ref_fit_pct'] or 0:5.1f} off {row['ref_offset_ms']:5d} "
+                  f"rap {row['ref_rap_pct']:3.0f}/{row['rap_pct']:3.0f}")
     print(f"{'metric':28} {'median':>8} {'mean':>8}")
     for metric in SUMMARY_METRICS:
         if summary:
             print(f"{metric:28} {summary[metric]:8.2f} {summary_mean[metric]:8.2f}")
+    ref_rap = sum(r["ref_rap_pct"] * r["rap_found_pct"] for r in reliable if r["rap_found_pct"] is not None)
+    gen_rap = sum(r["rap_pct"] * r["rap_precision_pct"] for r in reliable if r["rap_precision_pct"] is not None)
+    ref_total, gen_total = sum(r["ref_rap_pct"] for r in reliable), sum(r["rap_pct"] for r in reliable)
+    if ref_total or gen_total:
+        print(f"rap notes: {ref_rap / ref_total if ref_total else 0:.0f} % of the rap in the hand-made charts found, "
+              f"{gen_rap / gen_total if gen_total else 0:.0f} % of the generated rap is rap there")
 
 
 def compare(args) -> None:
@@ -505,6 +538,9 @@ def compare(args) -> None:
         print(f"{metric:28} {mean_a:12.2f} {mean_b:12.2f} {mean_b - mean_a:+8.2f} {better:7d} {worse:6d}")
 
 
+SOURCE_HELP = "usdb: only songs downloaded by USDB Syncer (folder has a .usdb file), own: only the others"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -517,6 +553,7 @@ def main() -> None:
     p.add_argument("--limit", type=int, help="evenly spread sample of this many songs")
     p.add_argument("--args", help="extra UltraSinger arguments")
     p.add_argument("--force", action="store_true", help="convert songs again that have a result")
+    p.add_argument("--source", choices=["all", "usdb", "own"], default="all", help=SOURCE_HELP)
     p.add_argument("--refresh", nargs="*",
                    choices=["vocal_separation", "denoise_vocal_audio", "transcription", "pitch_detection"],
                    help="cached stages to compute again")
@@ -527,6 +564,7 @@ def main() -> None:
     p.add_argument("work_dir")
     p.add_argument("--label", required=True)
     p.add_argument("--min-ref-fit", type=float, default=50.0)
+    p.add_argument("--source", choices=["all", "usdb", "own"], default="all", help=SOURCE_HELP)
     p.add_argument("--verbose", "-v", action="store_true")
     p.set_defaults(func=evaluate)
 

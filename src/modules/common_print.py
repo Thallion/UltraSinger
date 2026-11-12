@@ -60,6 +60,7 @@ def print_help() -> None:
     --quantize_to_key       Prefer the notes of the detected musical key where the sung pitch lies between two notes. Disabled by default.
     --disable_onset_correction   Do not move note starts onto the onsets heard in the vocal track.
     --disable_octave_correction  Do not move notes detected in the wrong octave back onto the melody.
+    --disable_rap_detection      Do not write rapped lines as rap notes.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words

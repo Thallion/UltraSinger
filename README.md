@@ -138,6 +138,7 @@ _Not all options working now!_
     --quantize_to_key       Prefer the notes of the detected musical key where the sung pitch lies between two notes. >> ((default) is disabled)
     --disable_onset_correction   Do not move note starts onto the onsets heard in the vocal track.
     --disable_octave_correction  Do not move notes detected in the wrong octave back onto the melody.
+    --disable_rap_detection      Do not write rapped lines as rap notes.
     --format_version        0.3.0|1.0.0|1.1.0|1.2.0 >> ((default) is 1.2.0)
     --musescore_path        path to MuseScore executable
     --keep_numbers          Transcribe numbers as digits and not words
@@ -297,6 +298,11 @@ After the pitch detection the notes are cleaned up. All of this is on by default
 * **Octave correction**: single notes and short runs that the pitch detection put an octave too high or too low
   are moved back onto the melody; longer passages that really are sung an octave apart stay.
   Disable with `--disable_octave_correction`.
+* **Rap notes**: rapped lines are written as rap notes (`R`), which the games score by the timing of the
+  syllables, not by their pitch. A line counts as rapped when its syllables come fast, no tone is held and the
+  pitch wanders like in speech or stays on one tone, and when a neighbouring line is rapped as well. The limits
+  are cautious: clear rap passages are found in part, and fast, speech-like verses may be marked too.
+  Disable with `--disable_rap_detection`.
 * **Line breaks**: with reference lyrics, a line ends where a line of the lyrics ends and at a rest of a second
   or more; without them, at a rest and at the end of a phrase. A line longer than 45 characters is split, and
   a line of a word or two that would only flash by joins its neighbour.
@@ -356,6 +362,10 @@ python tools/chart_benchmark.py convert "path/to/songs" "path/to/workdir" --labe
 python tools/chart_benchmark.py evaluate "path/to/songs" "path/to/workdir" --label new
 python tools/chart_benchmark.py compare "path/to/workdir" baseline new
 ```
+
+Songs that [USDB Syncer](https://github.com/bohning/usdb_syncer) downloaded are a quick way to more reference
+charts. Their folder has a `.usdb` file, so they can stay in the same library: `--source usdb` (for `convert`
+and `evaluate`) uses only them, `--source own` only the other songs.
 
 All pitches are compared without their octave, as the games do when they score. The main numbers:
 

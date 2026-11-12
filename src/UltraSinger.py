@@ -28,6 +28,8 @@ from modules.Audio.youtube import (
 )
 from modules.Audio.bpm import get_bpm_from_file
 from modules.Audio.onset_correction import detect_vocal_onsets, snap_to_onsets
+from modules.Pitcher.rap_detection import mark_rap_notes
+from modules.Ultrastar.linebreaks import compute_linebreaks
 
 from modules.console_colors import (
     ULTRASINGER_HEAD,
@@ -282,6 +284,11 @@ def run() -> tuple[str, Score, Score]:
                                                        allowed_notes_for_key)
         if settings.octave_correction:
             process_data.midi_segments = correct_octaves(process_data.midi_segments)
+        if settings.rap_detection:
+            linebreaks = compute_linebreaks(process_data.midi_segments, process_data.phrase_end_times,
+                                            process_data.has_lyric_lines)
+            process_data.midi_segments = mark_rap_notes(process_data.midi_segments, process_data.pitched_data,
+                                                        linebreaks)
 
     # Create plot
     if settings.create_plot:
@@ -940,6 +947,8 @@ def init_settings(argv: list[str]) -> Settings:
             settings.onset_correction = False
         elif opt in ("--disable_octave_correction"):
             settings.octave_correction = False
+        elif opt in ("--disable_rap_detection"):
+            settings.rap_detection = False
     if settings.output_folder_path == "":
         if settings.input_file_path.startswith("https:"):
             dirname = os.getcwd()
@@ -988,6 +997,7 @@ def arg_options():
         "disable_lyrics_line_times",
         "disable_onset_correction",
         "disable_octave_correction",
+        "disable_rap_detection",
     ]
     return long, short
 

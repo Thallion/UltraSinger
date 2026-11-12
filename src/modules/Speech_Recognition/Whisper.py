@@ -1,5 +1,6 @@
 """Whisper Speech Recognition Module"""
 import gc
+import json
 import os
 import inspect
 import textwrap
@@ -27,7 +28,7 @@ from enum import Enum
 from torch.cuda import OutOfMemoryError
 
 from modules.Speech_Recognition.TranscriptionResult import TranscriptionResult
-from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted, red_highlighted
+from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted, green_highlighted, red_highlighted
 from modules.Speech_Recognition.TranscribedData import TranscribedData, from_whisper
 from modules.Speech_Recognition.reference_lyrics import (
     MIN_MATCH_RATIO,
@@ -161,11 +162,14 @@ def transcribe_with_whisper(
     keep_numbers: bool = False,
     reference_lyrics: list = None,
     lyrics_min_match_ratio: float = MIN_MATCH_RATIO,
+    heard_text_cache_path: str = None,
 ) -> TranscriptionResult:
     """Transcribe with whisper
 
     reference_lyrics: lyrics the song may have (each a list of LyricWord); the words of
     those that fit the transcription best replace the transcribed ones
+    heard_text_cache_path: file that keeps what whisper heard, before the lyrics correct it
+    and the words are timed. With it, other lyrics do not need whisper again.
     """
     # Info: Regardless of the audio sampling rate used in the original audio file, whisper resample the audio signal to 16kHz (via ffmpeg). So the standard input from (44.1 or 48 kHz) should work.
     print(
@@ -181,41 +185,54 @@ def transcribe_with_whisper(
 
     try:
         torch.cuda.empty_cache()
-        loaded_whisper_model = whisperx.load_model(
-            model.value, language=language, device=device, compute_type=compute_type
-        )
-
         audio = whisperx.load_audio(audio_path)
 
-        print(f"{ULTRASINGER_HEAD} Transcribing {audio_path}")
+        if heard_text_cache_path is not None and os.path.isfile(heard_text_cache_path):
+            print(f"{ULTRASINGER_HEAD} {green_highlighted('cache')} reusing what whisper heard")
+            with open(heard_text_cache_path, encoding="utf-8") as file:
+                result = json.load(file)
+            language = result["used_language"]
+        else:
+            loaded_whisper_model = whisperx.load_model(
+                model.value, language=language, device=device, compute_type=compute_type
+            )
 
-        if language is None:
-            language = detect_language(
-                loaded_whisper_model, audio,
-                None if alignment_model is not None else languages_with_align_model())
+            print(f"{ULTRASINGER_HEAD} Transcribing {audio_path}")
 
-        # Songs with much text need more GPU memory: try again with half the batch size
-        while True:
-            try:
-                result = loaded_whisper_model.transcribe(
-                    audio, batch_size=batch_size, language=language
-                )
-                break
-            except (RuntimeError, OutOfMemoryError) as error:
-                if "out of memory" not in str(error).lower() or batch_size <= 1:
-                    raise
-                batch_size = max(1, batch_size // 2)
-                free_gpu_memory()
-                print(f"{ULTRASINGER_HEAD} {blue_highlighted('whisper')} ran out of GPU memory; "
-                      f"trying again with batch size {blue_highlighted(str(batch_size))}")
+            if language is None:
+                language = detect_language(
+                    loaded_whisper_model, audio,
+                    None if alignment_model is not None else languages_with_align_model())
+
+            # Songs with much text need more GPU memory: try again with half the batch size
+            while True:
+                try:
+                    result = loaded_whisper_model.transcribe(
+                        audio, batch_size=batch_size, language=language
+                    )
+                    break
+                except (RuntimeError, OutOfMemoryError) as error:
+                    if "out of memory" not in str(error).lower() or batch_size <= 1:
+                        raise
+                    batch_size = max(1, batch_size // 2)
+                    free_gpu_memory()
+                    print(f"{ULTRASINGER_HEAD} {blue_highlighted('whisper')} ran out of GPU memory; "
+                          f"trying again with batch size {blue_highlighted(str(batch_size))}")
+
+            if language is None:
+                language = result["language"]
+
+            # The alignment model needs the memory of the whisper model
+            del loaded_whisper_model
+            free_gpu_memory()
+
+            if heard_text_cache_path is not None:
+                result = {"language": result["language"], "used_language": language,
+                          "segments": result["segments"]}
+                with open(heard_text_cache_path, "w", encoding="utf-8") as file:
+                    json.dump(result, file, ensure_ascii=False)
 
         detected_language = result["language"]
-        if language is None:
-            language = detected_language
-
-        # The alignment model needs the memory of the whisper model
-        del loaded_whisper_model
-        free_gpu_memory()
 
         # load alignment model and metadata
         if alignment_model is None:

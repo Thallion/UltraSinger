@@ -236,7 +236,8 @@ times only count where they fit the song around the line (the lines before and a
 their times), so the lyrics of another recording place nothing. A line `[01:23.45] text` in a lyrics file is
 read the same way. Disable with `--disable_lyrics_line_times`.
 
-Lyrics are only used when they fit what was transcribed (at least half of the words in common), so the lyrics
+Lyrics are only used when they fit what was transcribed (at least 40 % of the words in common, in the same
+order; lyrics of another song share at most a quarter), so the lyrics
 of another song or version do no harm. Passages that the lyrics lack keep their transcribed words.
 
 ```commandline

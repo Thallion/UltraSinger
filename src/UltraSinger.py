@@ -60,6 +60,7 @@ from modules.Speech_Recognition.hyphenation import (
 )
 from modules.Speech_Recognition.Whisper import transcribe_with_whisper
 from modules.Speech_Recognition.reference_lyrics import (
+    LYRICS_MATCHING_VERSION,
     MIN_MATCH_RATIO,
     MIN_MATCH_RATIO_GIVEN_LYRICS,
     fetch_lyrics_from_lrclib,
@@ -689,11 +690,15 @@ def transcribe_audio(cache_folder_path: str, processing_audio_path: str,
             whisper_align_model_string = settings.whisper_align_model.replace("/", "_")
         whisper_device = "cpu" if settings.force_whisper_cpu else settings.pytorch_device
         transcription_config = f"{settings.transcriber}_{settings.whisper_model.value}_{whisper_device}_{whisper_align_model_string}_{settings.whisper_batch_size}_{settings.whisper_compute_type}_{settings.language}"
+        # What whisper heard does not depend on the lyrics: it is cached on its own
+        heard_text_path = os.path.join(cache_folder_path, f"{transcription_config}_heard.json")
+        if settings.skip_cache_transcription and check_file_exists(heard_text_path):
+            os.remove(heard_text_path)
         if reference_lyrics:
             lyrics_text = "//".join(" ".join(word.text + (f"/{word.line_start}" if word.line_end else "")
                                              for word in lyrics)
                                     for lyrics in reference_lyrics)
-            lyrics_text += f"//{lyrics_min_match_ratio}"
+            lyrics_text += f"//{lyrics_min_match_ratio}//{LYRICS_MATCHING_VERSION}"
             transcription_config += "_lyrics" + hashlib.md5(lyrics_text.encode("utf-8")).hexdigest()[:8]
         transcription_path = os.path.join(cache_folder_path, f"{transcription_config}.json")
         cached_transcription_available = check_file_exists(transcription_path)
@@ -709,6 +714,7 @@ def transcribe_audio(cache_folder_path: str, processing_audio_path: str,
                 settings.keep_numbers,
                 reference_lyrics,
                 lyrics_min_match_ratio,
+                heard_text_path,
             )
             with open(transcription_path, "w", encoding=FILE_ENCODING) as file:
                 file.write(transcription_result.to_json())

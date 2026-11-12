@@ -8,22 +8,32 @@ the forced alignment, so the alignment times the right text.
 import json
 import os
 import re
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from difflib import SequenceMatcher
+
+import numpy as np
 
 from modules.console_colors import ULTRASINGER_HEAD, blue_highlighted, red_highlighted
 
 LRCLIB_URL = "https://lrclib.net/api"
 REQUEST_TIMEOUT_SECONDS = 10
+# lrclib.net answers 429 to requests that follow each other too fast: wait and ask again
+RETRY_WAIT_SECONDS = (3, 10)
+
+# Raise this when the way lyrics are chosen or matched changes: cached transcriptions made with them are then made anew
+LYRICS_MATCHING_VERSION = 3
 
 # Lyrics that share a smaller part of their words with the transcription belong to another song or version
-MIN_MATCH_RATIO = 0.5
+# (measured on 12 songs: lyrics of another song share at most 24 %, those of the song at least 47 %)
+MIN_MATCH_RATIO = 0.4
 # Lyrics the user gave are the lyrics of the song; only a text that has nothing to do with it is refused
-MIN_MATCH_RATIO_GIVEN_LYRICS = 0.2
+MIN_MATCH_RATIO_GIVEN_LYRICS = 0.3
+# Lyrics have to hold at least this part of the transcribed words: a few lines that fit are not the lyrics of the song
+MIN_COVERED_SHARE = 0.15
 # Transcribed words without a counterpart in the lyrics are kept from this many in a row on
 # (a passage the lyrics lack); fewer are words the transcription made up
 KEEP_UNMATCHED_WORDS = 8
@@ -113,8 +123,15 @@ def find_lyrics_file(input_file_path: str) -> str | None:
 
 def _request_json(url: str):
     request = urllib.request.Request(url, headers={"User-Agent": "UltraSinger (https://github.com/rakuri255/UltraSinger)"})
-    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-        return json.loads(response.read().decode("utf-8"))
+    for wait in RETRY_WAIT_SECONDS + (None,):
+        try:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            if error.code != 429 or wait is None:
+                raise
+            time.sleep(wait)
+    return None
 
 
 _BRACKETS_AT_END = re.compile(r"\s*[\[(][^\])]*[\])]\s*$")
@@ -175,13 +192,119 @@ def fetch_lyrics_from_lrclib(artist: str | None, title: str | None) -> list[list
     return candidates[:MAX_LYRICS_CANDIDATES]
 
 
+# A common word counts this much; one that directly follows another common word counts one more
+_WORD_SCORE = 10000
+
+
+def common_words(first: list[str], second: list[str]) -> list[tuple[int, int]]:
+    """Index pairs of the words that two texts have in common, in the same order: as many as there are.
+
+    This is the longest common subsequence. difflib.SequenceMatcher looks for
+    the longest common block first and only then left and right of it; in a
+    song that pairs a chorus with a later one and loses the verses in between
+    (By The Way: 133 of 293 transcribed words found in the lyrics, 251 this way).
+
+    Songs repeat their lines, so there are many ways to pair as many words.
+    Of them, the one with the longest runs of neighbouring words is taken: a
+    chorus stays with the verse it follows in both texts.
+    """
+    rows, columns = len(first), len(second)
+    if not rows or not columns:
+        return []
+    codes = {}
+    first_codes = np.array([codes.setdefault(word, len(codes)) for word in first])
+    second_codes = np.array([codes.setdefault(word, len(codes)) for word in second])
+    # best[i, j]: score of first[:i] and second[:j]; run[i, j]: the same when first[i-1] and second[j-1] are a pair
+    best = np.zeros((rows + 1, columns + 1), dtype=np.int64)
+    run = np.full((rows + 1, columns + 1), -1, dtype=np.int64)
+    for i in range(rows):
+        equal = second_codes == first_codes[i]
+        after_pair = np.where(run[i, :-1] >= 0, run[i, :-1] + _WORD_SCORE + 1, -1)
+        run[i + 1, 1:] = np.where(equal, np.maximum(best[i, :-1] + _WORD_SCORE, after_pair), -1)
+        best[i + 1, 1:] = np.maximum.accumulate(np.maximum(best[i, 1:], run[i + 1, 1:]))
+
+    pairs = []
+    i, j = rows, columns
+    while i > 0 and j > 0:
+        if best[i, j] == best[i - 1, j]:
+            i -= 1
+        elif best[i, j] == best[i, j - 1]:
+            j -= 1
+        else:
+            # a run of pairs ends here: follow it back as long as it scores as a run
+            while True:
+                pairs.append((i - 1, j - 1))
+                continues = run[i - 1, j - 1] >= 0 and run[i, j] == run[i - 1, j - 1] + _WORD_SCORE + 1
+                i, j = i - 1, j - 1
+                if not continues:
+                    break
+    pairs.reverse()
+    return pairs
+
+
+def word_opcodes(first: list[str], second: list[str]) -> list[tuple[str, int, int, int, int]]:
+    """How to turn ``first`` into ``second``, like difflib's get_opcodes, around the common words of both"""
+    opcodes = []
+    i = j = 0
+
+    def gap(i2: int, j2: int) -> None:
+        if i < i2 and j < j2:
+            opcodes.append(("replace", i, i2, j, j2))
+        elif i < i2:
+            opcodes.append(("delete", i, i2, j, j2))
+        elif j < j2:
+            opcodes.append(("insert", i, i2, j, j2))
+
+    for a, b in common_words(first, second):
+        if (a, b) != (i, j) or not opcodes or opcodes[-1][0] != "equal":
+            gap(a, b)
+            opcodes.append(("equal", a, a + 1, b, b + 1))
+        else:
+            tag, i1, _, j1, _ = opcodes[-1]
+            opcodes[-1] = (tag, i1, a + 1, j1, b + 1)
+        i, j = a + 1, b + 1
+    gap(len(first), len(second))
+    return _without_stray_pairs(opcodes)
+
+
+# A common word or two between passages that differ is chance ("the", "of"), when the passages
+# around it have at least this many times as many words
+STRAY_PAIR_MAX_WORDS = 2
+STRAY_PAIR_SURROUNDING_FACTOR = 4
+
+
+def _without_stray_pairs(opcodes: list[tuple[str, int, int, int, int]]) -> list[tuple[str, int, int, int, int]]:
+    """Join passages that differ across a stray common word between them.
+
+    Where the transcription garbled a verse, some of its words still occur in
+    the lyrics of that verse. Paired, they cut the verse into pieces: lines of
+    the lyrics without any transcribed word left for them, and transcribed
+    words without lyrics. As one passage, the lyrics of the verse take the
+    place of everything transcribed there.
+    """
+    def words(opcode) -> int:
+        return (opcode[2] - opcode[1]) + (opcode[4] - opcode[3])
+
+    result = list(opcodes)
+    k = 1
+    while k < len(result) - 1:
+        tag, i1, i2, _, _ = result[k]
+        before, after = result[k - 1], result[k + 1]
+        if (tag == "equal" and i2 - i1 <= STRAY_PAIR_MAX_WORDS and before[0] != "equal" and after[0] != "equal"
+                and words(before) + words(after) >= STRAY_PAIR_SURROUNDING_FACTOR * 2 * (i2 - i1)):
+            i_start, i_stop, j_start, j_stop = before[1], after[2], before[3], after[4]
+            joined = "replace" if i_stop > i_start and j_stop > j_start else ("delete" if i_stop > i_start else "insert")
+            result[k - 1:k + 2] = [(joined, i_start, i_stop, j_start, j_stop)]
+            k = max(k - 1, 1)
+        else:
+            k += 1
+    return result
+
+
 def matched_words(transcribed_words: list[str], lyric_words: list[LyricWord]) -> int:
     """Number of words that the transcription and the lyrics have in common, in the same order"""
-    if not transcribed_words or not lyric_words:
-        return 0
-    matcher = SequenceMatcher(None, [normalize(word) for word in transcribed_words],
-                              [normalize(word.text) for word in lyric_words], autojunk=False)
-    return sum(block.size for block in matcher.get_matching_blocks())
+    return len(common_words([normalize(word) for word in transcribed_words],
+                            [normalize(word.text) for word in lyric_words]))
 
 
 def match_ratio(transcribed_words: list[str], lyric_words: list[LyricWord]) -> float:
@@ -205,7 +328,8 @@ def choose_lyrics(segments: list[dict], candidates: list[list[LyricWord]],
     """
     transcribed = [word for segment in segments for word in segment["text"].split()]
     fitting = [lyric_words for lyric_words in candidates
-               if match_ratio(transcribed, lyric_words) >= min_match_ratio]
+               if match_ratio(transcribed, lyric_words) >= min_match_ratio
+               and matched_words(transcribed, lyric_words) >= MIN_COVERED_SHARE * len(transcribed)]
     if not fitting:
         if candidates:
             best_ratio = max(match_ratio(transcribed, lyric_words) for lyric_words in candidates)
@@ -258,13 +382,13 @@ def correct_segments(segments: list[dict],
 
     ratio = match_ratio([word for word, _ in transcribed], lyric_words)
 
-    matcher = SequenceMatcher(None, [normalize(word) for word, _ in transcribed],
-                              [normalize(word.text) for word in lyric_words], autojunk=False)
+    opcodes = word_opcodes([normalize(word) for word, _ in transcribed],
+                           [normalize(word.text) for word in lyric_words])
 
     # (text, line end, segment index, index in the lyrics) of every word of the result
     result: list[tuple[str, bool, int, int | None]] = []
     replaced = 0
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+    for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             for k in range(i2 - i1):
                 lyric = lyric_words[j1 + k]

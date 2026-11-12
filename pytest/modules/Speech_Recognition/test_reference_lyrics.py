@@ -6,6 +6,8 @@ import unittest
 
 from src.modules.Speech_Recognition.reference_lyrics import (
     choose_lyrics,
+    common_words,
+    word_opcodes,
     clean_name,
     correct_segments,
     find_lyrics_file,
@@ -154,6 +156,38 @@ class CorrectSegmentsTest(unittest.TestCase):
         self.assertIsNone(correct_segments([{"text": "la la", "start": 0, "end": 1}], []))
 
 
+class CommonWordsTest(unittest.TestCase):
+    def test_words_in_the_same_order_are_paired(self):
+        self.assertEqual(common_words("a b c d".split(), "a x c d".split()), [(0, 0), (2, 2), (3, 3)])
+        self.assertEqual(common_words([], ["a"]), [])
+        self.assertEqual(common_words(["a"], ["b"]), [])
+
+    def test_a_repeated_chorus_does_not_cost_the_verses(self):
+        chorus = "by the way i tried to say i would be there".split()
+        heard = "one two three".split() + chorus + "four five six".split() + chorus
+        lyrics = chorus + "four five six".split() + chorus + "seven eight".split()
+        # everything but the first verse of the transcription and the last one of the lyrics
+        self.assertEqual(len(common_words(heard, lyrics)), 2 * len(chorus) + 3)
+
+    def test_opcodes_cover_both_texts(self):
+        first, second = "a b c d e".split(), "x b c y z e f".split()
+        opcodes = word_opcodes(first, second)
+        self.assertEqual(opcodes, [("replace", 0, 1, 0, 1), ("equal", 1, 3, 1, 3), ("replace", 3, 4, 3, 5),
+                                   ("equal", 4, 5, 5, 6), ("insert", 5, 5, 6, 7)])
+        self.assertEqual(word_opcodes("a b".split(), "b".split()), [("delete", 0, 1, 0, 0), ("equal", 1, 2, 0, 1)])
+
+
+    def test_a_stray_common_word_does_not_cut_a_garbled_passage(self):
+        heard = "one two three bla blub the blob blib four five six".split()
+        lyrics = "one two three we sing of the land and sea four five six".split()
+        self.assertEqual(word_opcodes(heard, lyrics),
+                         [("equal", 0, 3, 0, 3), ("replace", 3, 8, 3, 10), ("equal", 8, 11, 10, 13)])
+
+    def test_a_common_word_between_small_differences_stays(self):
+        self.assertEqual(word_opcodes("a the b".split(), "c the d".split()),
+                         [("replace", 0, 1, 0, 1), ("equal", 1, 2, 1, 2), ("replace", 2, 3, 2, 3)])
+
+
 class ChooseLyricsTest(unittest.TestCase):
     SEGMENTS = [{"text": "never gonna give you up never gonna let you down", "start": 0, "end": 5}]
 
@@ -169,9 +203,14 @@ class ChooseLyricsTest(unittest.TestCase):
         self.assertIs(choose_lyrics(self.SEGMENTS, [part, whole]), whole)
 
     def test_given_lyrics_may_fit_less(self):
-        lyrics = parse_lyrics("Never ever give it up\nI will let him drown")
+        lyrics = parse_lyrics("Never ever give it up\nI will make him drown")
         self.assertIsNone(choose_lyrics(self.SEGMENTS, [lyrics]))
-        self.assertIs(choose_lyrics(self.SEGMENTS, [lyrics], 0.2), lyrics)
+        self.assertIs(choose_lyrics(self.SEGMENTS, [lyrics], 0.3), lyrics)
+
+    def test_a_few_fitting_words_are_not_the_lyrics(self):
+        segments = [{"text": "never gonna give you up " * 10, "start": 0, "end": 30}]
+        skit = parse_lyrics("Never gonna give you up")
+        self.assertIsNone(choose_lyrics(segments, [skit]))
 
     def test_no_lyrics_fit(self):
         other = parse_lyrics("Completely different words of another song")

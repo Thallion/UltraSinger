@@ -25,7 +25,6 @@ import statistics
 import sys
 import unicodedata
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.join(REPO_ROOT, "src")
@@ -346,6 +345,32 @@ def chart_words(chart: Chart) -> list[tuple[str, float]]:
     return result
 
 
+def common_words(first: list[str], second: list[str]) -> list[tuple[int, int]]:
+    """Index pairs of the words both texts have, in the same order (longest common subsequence).
+
+    difflib.SequenceMatcher finds far fewer in songs: it pairs a chorus with a
+    later one and loses the verses in between.
+    """
+    rows, columns = len(first), len(second)
+    lengths = [[0] * (columns + 1) for _ in range(rows + 1)]
+    for i, word in enumerate(first):
+        row, previous = lengths[i + 1], lengths[i]
+        for j, other in enumerate(second):
+            row[j + 1] = previous[j] + 1 if word == other else max(previous[j + 1], row[j])
+    pairs = []
+    i, j = rows, columns
+    while i > 0 and j > 0:
+        if first[i - 1] == second[j - 1]:
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif lengths[i - 1][j] >= lengths[i][j - 1]:
+            i -= 1
+        else:
+            j -= 1
+    pairs.reverse()
+    return pairs
+
+
 def onset_hits(source: list[float], target: list[float], tolerance: float) -> float:
     if not source:
         return 0.0
@@ -403,15 +428,13 @@ def evaluate_song(ref: Chart, gen: Chart, cache_dir: str) -> dict:
 
     ref_words = [(w, t + offset) for w, t in chart_words(ref)]
     gen_words = chart_words(gen)
-    matcher = SequenceMatcher(None, [w for w, _ in ref_words], [w for w, _ in gen_words], autojunk=False)
     found = 0
     start_100 = start_250 = 0
-    for block in matcher.get_matching_blocks():
-        for k in range(block.size):
-            found += 1
-            delta = abs(ref_words[block.a + k][1] - gen_words[block.b + k][1])
-            start_100 += delta <= 0.1
-            start_250 += delta <= 0.25
+    for a, b in common_words([w for w, _ in ref_words], [w for w, _ in gen_words]):
+        found += 1
+        delta = abs(ref_words[a][1] - gen_words[b][1])
+        start_100 += delta <= 0.1
+        start_250 += delta <= 0.25
 
     ref_breaks = [t + offset for t in ref.line_starts]
     break_recall = onset_hits(ref_breaks, gen.line_starts, 0.5)
